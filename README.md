@@ -2,7 +2,7 @@
 
 This project is an experiment in creating a bowed string synthesizer using the Web Audio API, specifically `AudioContext` and `AudioWorkletProcessor`. We are incrementally building up a physical model to explore different synthesis techniques.
 
-## Current Status (as of end of session 2024-05-04 - Modal Controls Update)
+## Current Status (as of end of session 2024-05-04 - AudioParam Refactor)
 <!-- Please update date as needed -->
 
 The synthesizer currently implements the following:
@@ -41,14 +41,15 @@ The synthesizer currently implements the following:
         *   Summing & Mixing: Outputs of the three modal BPFs are summed (not averaged). This sum is then mixed with the LPF output via the "Body Reso Mix" UI slider (`bpfBankMixLevelParam` 0-1).
     *   The combined LPF + Modal Body signal is then processed by `loopGain` and has excitation added.
 
-4.  **Parameter Management Refactor:**
-    *   HTML sliders (`index.html`) use `data-dsp-min`, `data-dsp-max`, and `data-dsp-decimals` attributes to define their mapping to DSP values and display precision.
-    *   `main.js` reads these attributes to configure parameters, manage display, and pass mapping information and raw slider values to the worklet.
-    *   `basic-processor.js` receives raw UI slider values and mapping info (if applicable), and uses a helper (`_getDspValue`) to get the final DSP values. Internal DSP parameter values are stored in `this.dspValues`.
+4.  **Parameter Management via `AudioParam`:**
+    *   Most UI-controlled synthesis parameters (e.g., LPF settings, modal body Q/frequencies, mix levels, excitation parameters) are now managed using `AudioParam`s defined in `basic-processor.js`.
+    *   `main.js` updates these `AudioParam`s directly, primarily using `linearRampToValueAtTime()` for sliders to ensure smooth transitions and reduce audible glitches. Modal frequency dropdowns use `setValueAtTime()`.
+    *   The main string `frequency` (affecting delay line length) and bowing state are still handled via `messagePort` due to the structural changes they incur.
+    *   `basic-processor.js` reads the `AudioParam` values in its `process()` method, caches them, and recalculates filter coefficients when they change.
 
 **User Interface (`index.html` & `main.js`):**
 
-*   Sliders and dropdowns for key synthesis parameters with real-time numeric value display.
+*   Sliders and dropdowns for key synthesis parameters with real-time numeric value display. Slider-based changes are now significantly smoother due to `AudioParam` ramping.
     *   Modal body frequencies are controlled by three independent dropdown selectors.
     *   A "Body Mode Q" slider globally scales the Q of the modal body resonators.
 *   "Start Audio" / "Suspend Audio" button.
@@ -64,13 +65,15 @@ The synthesizer currently implements the following:
 
 ## Known Issues / Quirks:
 
-*   **Parameter Change Glitches:** Abrupt changes to parameters (especially LPF, modal Q, and modal frequencies via dropdowns) can cause audible clicks or discontinuities. Parameter smoothing in the processor is needed.
+*   **Parameter Change Glitches:** Audible glitches when changing parameters have been significantly reduced for sliders by migrating to `AudioParam`s with `linearRampToValueAtTime()`.
+    *   Changes to modal frequencies via dropdowns (using `setValueAtTime()`) are still abrupt but generally acceptable for discrete note changes.
+    *   The main string "Frequency" slider still causes an abrupt sound change and re-initialization, as it's not yet an `AudioParam` (due to delay line resizing requirements). True per-sample coefficient smoothing within the processor could further refine this for all parameters.
 *   **Modal Gains Fixed:** The relative gains for each of the three body modes are currently hardcoded in `basic-processor.js`.
 *   Interactions between `loopGain` and the modal body resonator (especially with its current gains and Q range) can still lead to strong resonances, requiring careful adjustment of the "Body Reso Mix" and `loopGain`.
 
 ## Potential Next Steps for Tomorrow/Future:
 
-1.  **Parameter Smoothing:** Implement parameter smoothing in `basic-processor.js` for all key UI-controlled parameters to eliminate audio glitches on change.
+1.  **Main String Frequency Portamento:** Re-architect the delay line in `basic-processor.js` (e.g., using fractional delays) to allow the main string `frequency` to be controlled smoothly by an `AudioParam`, enabling portamento. This would address the remaining major source of abrupt sound change on parameter update.
 2.  **Enhance Modal Body Resonator:**
     *   Consider UI controls for individual mode gains.
     *   Investigate adding more modes to the body resonator.
