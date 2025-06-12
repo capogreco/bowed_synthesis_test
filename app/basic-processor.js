@@ -1,61 +1,81 @@
-// basic-processor.js (LPF + 4x BPF Filterbank, BPF peak gain = Q, BPF Q_max = 7.0)
+// basic-processor.js (Refactored for Parameter Mapping - Corrected)
 class ContinuousExcitationProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super(options);
-    this.sampleRate = sampleRate; // Globally available
+    this.sampleRate = sampleRate; // Globally available in AudioWorkletGlobalScope
 
-    // Main LPF parameters
-    this.frequency = 220;
-    this.loopGain = 0.995;
-    this.cutoffParam = 0.5;
-    this.resonanceParam = 0.1;
-    // Excitation parameters
-    this.bowForce = 0.02;
-    this.sawPulseMixParam = 0.5;
-    this.pulseWidthParam = 0.5;
-    this.toneNoiseMixParam = 0.5;
+    // --- Default Internal DSP Parameter Values ---
+    this.dspValues = {
+        frequency: 220,
+        loopGain: 0.995,
+        lpfCutoff: 0.5,    // This is a 0-1 value used for internal log mapping
+        lpfQ: 0.1,         // This is a 0-1 value used for internal power mapping
+        bpfQ: 0.1,           // This is a 0-1 value that will be mapped to actual Q 0.707-7.0
+        bpfBankMix: 0.25,  // Direct 0-1 value
+        sawPulseMix: 0.5,    // Direct 0-1 value
+        pulseWidth: 0.5,     // Direct 0.01-0.99 value (slider is 0.01-0.99)
+        toneNoiseMix: 0.5,   // Direct 0-1 value
+        exciteIntensity: 0.02 // Direct 0-0.1 value (slider is 0-0.1)
+    };
 
-    // --- BPF Filterbank Parameters ---
-    this.violinOpenStringFreqs = [196.00, 293.66, 440.00, 659.25]; // G3, D4, A4, E5
-    this.numBpfChannels = this.violinOpenStringFreqs.length;
-
-    // UI Controlled Parameters for BPF Bank
-    this.bpfQParam = 0.1; // Global Q for all BPFs (0-1 from UI, maps to 0.707-7.0 now)
-    this.bpfBankMixLevelParam = 0.5; // Global mix for the summed BPF bank output vs LPF (was 0.25)
+    this.paramMappings = {};
 
     if (options && options.processorOptions) {
-        this.frequency = options.processorOptions.frequency || this.frequency;
-        this.loopGain = options.processorOptions.loopGain || this.loopGain;
-        this.cutoffParam = options.processorOptions.cutoffParam || this.cutoffParam;
-        this.resonanceParam = options.processorOptions.resonanceParam || this.resonanceParam;
-        this.bowForce = options.processorOptions.bowForce || this.bowForce;
-        this.sawPulseMixParam = options.processorOptions.sawPulseMixParam || this.sawPulseMixParam;
-        this.pulseWidthParam = options.processorOptions.pulseWidthParam || this.pulseWidthParam;
-        this.toneNoiseMixParam = options.processorOptions.toneNoiseMixParam || this.toneNoiseMixParam;
-        this.bpfQParam = options.processorOptions.bpfQParam || this.bpfQParam;
-        this.bpfBankMixLevelParam = options.processorOptions.bpfBankMixLevelParam || this.bpfBankMixLevelParam;
+        const opts = options.processorOptions;
+        for (const key in opts) {
+            if (key.endsWith('_dspMin')) {
+                const baseKey = key.replace('_dspMin', '');
+                if (!this.paramMappings[baseKey]) this.paramMappings[baseKey] = {};
+                this.paramMappings[baseKey].dspMin = opts[key];
+            } else if (key.endsWith('_dspMax')) {
+                const baseKey = key.replace('_dspMax', '');
+                if (!this.paramMappings[baseKey]) this.paramMappings[baseKey] = {};
+                this.paramMappings[baseKey].dspMax = opts[key];
+            }
+        }
+        this._updateDspValuesFromRaw(opts);
     }
-
-    // LPF Coefficients & State
-    this.lpf_b0 = 1; this.lpf_b1 = 0; this.lpf_b2 = 0; this.lpf_a1 = 0; this.lpf_a2 = 0;
-    this.lpf_z1 = 0; this.lpf_z2 = 0;
-
-    // BPF Filterbank Coefficients & State (Arrays)
-    this.bp_b0 = new Float32Array(this.numBpfChannels);
-    this.bp_b1 = new Float32Array(this.numBpfChannels);
-    this.bp_b2 = new Float32Array(this.numBpfChannels);
-    this.bp_a1 = new Float32Array(this.numBpfChannels);
+    
+    this.violinOpenStringFreqs = [196.00, 293.66, 440.00, 659.25];
+    this.numBpfChannels = this.violinOpenStringFreqs.length;
+    this.bp_b0 = new Float32Array(this.numBpfChannels); this.bp_b1 = new Float32Array(this.numBpfChannels);
+    this.bp_b2 = new Float32Array(this.numBpfChannels); this.bp_a1 = new Float32Array(this.numBpfChannels);
     this.bp_a2 = new Float32Array(this.numBpfChannels);
-    this.bp_z1_state = new Float32Array(this.numBpfChannels);
-    this.bp_z2_state = new Float32Array(this.numBpfChannels);
+    this.bp_z1_state = new Float32Array(this.numBpfChannels); this.bp_z2_state = new Float32Array(this.numBpfChannels);
 
+    this.lpf_b0 = 1; this.lpf_b1 = 0; this.lpf_b2 = 0; this.lpf_a1 = 0; this.lpf_a2 = 0;             
+    this.lpf_z1 = 0; this.lpf_z2 = 0; 
+    
     this.delayLine = null; this.currentIndex = 0; this.delaySamples = 0;
     this.sawPhase = 0.0; this.isBowing = false;
 
-    this._calculateLpfCoefficients();
-    this._calculateBpfBankCoefficients();
-    this._initializeDelayLine();
+    this._recalculateAllCoefficients(); 
+    this._initializeDelayLine();   
     this.port.onmessage = this._handleMessage.bind(this);
+  }
+
+  _getDspValue(paramKey, rawSliderValue) {
+      if (this.paramMappings[paramKey] && 
+          this.paramMappings[paramKey].dspMin !== undefined && 
+          this.paramMappings[paramKey].dspMax !== undefined) {
+          const min = this.paramMappings[paramKey].dspMin;
+          const max = this.paramMappings[paramKey].dspMax;
+          return min + (rawSliderValue * (max - min));
+      }
+      return rawSliderValue; 
+  }
+
+  _updateDspValuesFromRaw(rawData) {
+      if (rawData.frequency !== undefined) this.dspValues.frequency = this._getDspValue('frequency', rawData.frequency);
+      if (rawData.loopGain !== undefined) this.dspValues.loopGain = this._getDspValue('loopGain', rawData.loopGain);
+      if (rawData.cutoffParam !== undefined) this.dspValues.lpfCutoff = rawData.cutoffParam; 
+      if (rawData.resonanceParam !== undefined) this.dspValues.lpfQ = rawData.resonanceParam; 
+      if (rawData.bpfQParam !== undefined) this.dspValues.bpfQ = rawData.bpfQParam;       
+      if (rawData.bpfBankMixLevelParam !== undefined) this.dspValues.bpfBankMix = this._getDspValue('bpfBankMixLevelParam', rawData.bpfBankMixLevelParam);
+      if (rawData.sawPulseMixParam !== undefined) this.dspValues.sawPulseMix = this._getDspValue('sawPulseMixParam', rawData.sawPulseMixParam);
+      if (rawData.pulseWidthParam !== undefined) this.dspValues.pulseWidth = this._getDspValue('pulseWidthParam', rawData.pulseWidthParam);
+      if (rawData.toneNoiseMixParam !== undefined) this.dspValues.toneNoiseMix = this._getDspValue('toneNoiseMixParam', rawData.toneNoiseMixParam);
+      if (rawData.bowForce !== undefined) this.dspValues.exciteIntensity = this._getDspValue('bowForce', rawData.bowForce);
   }
 
   _handleMessage(event) {
@@ -65,145 +85,137 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
     if (data.type === 'setBowing') {
       if (typeof data.isBowing === 'boolean') {
           this.isBowing = data.isBowing;
-          if (this.isBowing) { this._resetFilterStates(); this._resetSawPhase(); }
+          if (this.isBowing) { this._resetFilterStates(); this._resetSawPhase(); } 
        }
     } else if (data.type === 'setParameter') {
-      let reinitDelay = false, recalcLpf = false, recalcBpfBank = false;
-
-        if (data.frequency !== undefined && data.frequency !== this.frequency && data.frequency > 0) {
-          this.frequency = data.frequency; reinitDelay = true;
-        }
-        if (data.loopGain !== undefined) this.loopGain = data.loopGain;
-        if (data.bowForce !== undefined) this.bowForce = data.bowForce;
-        if (data.sawPulseMixParam !== undefined) this.sawPulseMixParam = data.sawPulseMixParam;
-        if (data.pulseWidthParam !== undefined) this.pulseWidthParam = data.pulseWidthParam;
-        if (data.toneNoiseMixParam !== undefined) this.toneNoiseMixParam = data.toneNoiseMixParam;
-
-        if (data.cutoffParam !== undefined && data.cutoffParam !== this.cutoffParam) {
-            this.cutoffParam = data.cutoffParam; recalcLpf = true;
-        }
-        if (data.resonanceParam !== undefined && data.resonanceParam !== this.resonanceParam) {
-            this.resonanceParam = data.resonanceParam; recalcLpf = true;
-        }
-        if (data.bpfQParam !== undefined && data.bpfQParam !== this.bpfQParam) {
-            this.bpfQParam = data.bpfQParam;
-            recalcBpfBank = true;
-        }
-        if (data.bpfBankMixLevelParam !== undefined && data.bpfBankMixLevelParam !== this.bpfBankMixLevelParam) {
-            this.bpfBankMixLevelParam = data.bpfBankMixLevelParam;
-        }
+      const rawValues = data; // Corrected: data object itself contains the parameters
+      let reinitDelay = false, recalcLpf = false, recalcBpfBank = false; 
+      
+      const newMappedFreq = this._getDspValue('frequency', rawValues.frequency);
+      if (rawValues.frequency !== undefined && newMappedFreq !== this.dspValues.frequency) {
+          reinitDelay = true;
+      }
+      
+      if (rawValues.cutoffParam !== undefined && rawValues.cutoffParam !== this.dspValues.lpfCutoff) {
+          recalcLpf = true; 
+      }
+      if (rawValues.resonanceParam !== undefined && rawValues.resonanceParam !== this.dspValues.lpfQ) {
+          recalcLpf = true;   
+      }
+      if (rawValues.bpfQParam !== undefined && rawValues.bpfQParam !== this.dspValues.bpfQ) { // Compare with the stored 0-1 value
+          recalcBpfBank = true;    
+      }
+      
+      this._updateDspValuesFromRaw(rawValues);
 
       if (reinitDelay) {
-          this._initializeDelayLine();
+          this._initializeDelayLine(); 
       } else {
           if (recalcLpf) this._calculateLpfCoefficients();
-          if (recalcBpfBank) this._calculateBpfBankCoefficients();
+          if (recalcBpfBank) this._calculateBpfBankCoefficients(); 
       }
     }
   }
+  
+  _recalculateAllCoefficients() { 
+      this._calculateLpfCoefficients();
+      this._calculateBpfBankCoefficients();
+  }
 
-  _calculateLpfCoefficients() {
+  _calculateLpfCoefficients() { 
     const Fs = this.sampleRate;
-    const minF = 40, maxF = Math.min(18000, Fs * 0.45);
-    let actualCutoffFreq = minF * Math.pow(maxF / minF, this.cutoffParam);
-    actualCutoffFreq = Math.max(minF, Math.min(maxF, actualCutoffFreq));
+    const sliderCutoff = this.dspValues.lpfCutoff; 
+    const sliderReso = this.dspValues.lpfQ; 
 
-    const minQ = 0.707, maxQ = 2.5;
-    const currentResonanceParam = Math.max(0.0, Math.min(1.0, this.resonanceParam));
-    const mappedResonanceParam = Math.pow(currentResonanceParam, 3);
-    let actualQ_lpf = minQ * Math.pow(maxQ / minQ, mappedResonanceParam);
-    if (mappedResonanceParam <=0) actualQ_lpf = minQ;
-    actualQ_lpf = Math.max(minQ, Math.min(actualQ_lpf, maxQ * 1.01));
+    const minF = 40, maxF = Math.min(18000, Fs * 0.45); 
+    let actualCutoffFreq = minF * Math.pow(maxF / minF, sliderCutoff);
+    actualCutoffFreq = Math.max(minF, Math.min(maxF, actualCutoffFreq));
+    
+    const mappedResonanceParam = Math.pow(Math.max(0.0, Math.min(1.0, sliderReso)), 3);
+    const minQLPF = 0.707, maxQLPF = 2.5;
+    let actualQ_lpf = minQLPF * Math.pow(maxQLPF / minQLPF, mappedResonanceParam); 
+    if (mappedResonanceParam <=0) actualQ_lpf = minQLPF; 
+    actualQ_lpf = Math.max(minQLPF, Math.min(actualQ_lpf, maxQLPF * 1.01));
 
     const F0_lpf = actualCutoffFreq, Q_lpf = actualQ_lpf;
     const omega_lpf = 2 * Math.PI * F0_lpf / Fs, s_lpf = Math.sin(omega_lpf), c_lpf = Math.cos(omega_lpf);
     const alpha_lpf = s_lpf / (2 * Q_lpf);
     const b0_lpf_coeff = (1 - c_lpf) / 2, b1_lpf_coeff = 1 - c_lpf, b2_lpf_coeff = (1 - c_lpf) / 2;
     const a0_lpf_coeff = 1 + alpha_lpf, a1_lpf_rbj = -2 * c_lpf, a2_lpf_rbj = 1 - alpha_lpf;
-
-    this.lpf_b0 = b0_lpf_coeff / a0_lpf_coeff;
-    this.lpf_b1 = b1_lpf_coeff / a0_lpf_coeff;
-    this.lpf_b2 = b2_lpf_coeff / a0_lpf_coeff;
-    this.lpf_a1 = a1_lpf_rbj / a0_lpf_coeff;
-    this.lpf_a2 = a2_lpf_rbj / a0_lpf_coeff;
+    this.lpf_b0 = b0_lpf_coeff / a0_lpf_coeff; this.lpf_b1 = b1_lpf_coeff / a0_lpf_coeff; this.lpf_b2 = b2_lpf_coeff / a0_lpf_coeff;
+    this.lpf_a1 = a1_lpf_rbj / a0_lpf_coeff; this.lpf_a2 = a2_lpf_rbj / a0_lpf_coeff;
   }
 
-  _calculateBpfBankCoefficients() {
+  _calculateBpfBankCoefficients() { 
     const Fs = this.sampleRate;
-    const minActualBQ = 0.707;
-    const maxActualBQ = 7.0; // Adjusted BPF Q_max
-    const currentBpfQParam = Math.max(0.0, Math.min(1.0, this.bpfQParam));
-    const actualGlobalBQ = minActualBQ + (currentBpfQParam * (maxActualBQ - minActualBQ));
+    let actualGlobalBQ = this._getDspValue('bpfQParam', this.dspValues.bpfQ);
+    // Workaround: Ensure Q is at least 0.707 to prevent division by zero or extreme attenuation if mapping fails
+    // The root cause is likely missing/incorrect paramMappings for bpfQParam from main.js
+    actualGlobalBQ = Math.max(0.707, actualGlobalBQ);
 
     for (let i = 0; i < this.numBpfChannels; i++) {
-        const F0_bpf = this.violinOpenStringFreqs[i];
-        const Q_bpf = actualGlobalBQ;
-
+        const F0_bpf = this.violinOpenStringFreqs[i]; 
+        const Q_bpf = actualGlobalBQ; 
         if (F0_bpf <=0 || F0_bpf >= Fs / 2) {
-            this.bp_b0[i] = 1; this.bp_b1[i] = 0; this.bp_b2[i] = 0;
-            this.bp_a1[i] = 0; this.bp_a2[i] = 0;
+            this.bp_b0[i] = 1; this.bp_b1[i] = 0; this.bp_b2[i] = 0; this.bp_a1[i] = 0; this.bp_a2[i] = 0;
             continue;
         }
-
         const omega_bpf = 2 * Math.PI * F0_bpf / Fs;
         const s_bpf = Math.sin(omega_bpf);
         const c_bpf = Math.cos(omega_bpf);
         const alpha_bpf = s_bpf / (2 * Q_bpf);
-
-        // BPF coefficients for Peak Gain = Q
         const b0_coeff = Q_bpf * alpha_bpf; 
         const b1_coeff = 0;
         const b2_coeff = -(Q_bpf * alpha_bpf); 
-
         const a0_coeff = 1 + alpha_bpf;
         const a1_rbj = -2 * c_bpf;
         const a2_rbj = 1 - alpha_bpf;
-
-        this.bp_b0[i] = b0_coeff / a0_coeff;
-        this.bp_b1[i] = b1_coeff / a0_coeff;
-        this.bp_b2[i] = b2_coeff / a0_coeff;
-        this.bp_a1[i] = a1_rbj / a0_coeff;
+        this.bp_b0[i] = b0_coeff / a0_coeff; this.bp_b1[i] = b1_coeff / a0_coeff; 
+        this.bp_b2[i] = b2_coeff / a0_coeff; this.bp_a1[i] = a1_rbj / a0_coeff;
         this.bp_a2[i] = a2_rbj / a0_coeff;
     }
   }
 
-  _resetFilterStates() {
+  _resetFilterStates() { 
     this.lpf_z1 = 0.0; this.lpf_z2 = 0.0;
     for (let i = 0; i < this.numBpfChannels; i++) {
-        this.bp_z1_state[i] = 0.0;
+        this.bp_z1_state[i] = 0.0; 
         this.bp_z2_state[i] = 0.0;
     }
   }
   _resetSawPhase() { this.sawPhase = 0.0; }
 
-  _initializeDelayLine() {
-    this.delaySamples = Math.floor(this.sampleRate / this.frequency);
-    if (this.delaySamples < 2) {
-        console.error(`[Processor] InitDelay: Invalid samples (${this.delaySamples}) for Freq ${this.frequency}Hz.`);
-        this.delayLine = null; return;
-    }
+  _initializeDelayLine() { 
+    this.delaySamples = Math.floor(this.sampleRate / this.dspValues.frequency); 
+    if (this.delaySamples < 2) { this.delayLine = null; return; }
     this.delayLine = new Float32Array(this.delaySamples);
     this.currentIndex = 0;
-    this._resetFilterStates();
+    this._resetFilterStates(); 
     this._resetSawPhase();
-    this._calculateLpfCoefficients();
-    this._calculateBpfBankCoefficients();
+    this._recalculateAllCoefficients(); 
   }
 
-  process(inputs, outputs, parameters) {
+  process(inputs, outputs, parameters) { 
     if (!this.delayLine || this.delaySamples === 0) {
-      outputs[0][0].fill(0); return true;
+      outputs[0][0].fill(0); return true; 
     }
     const outputChannel = outputs[0][0];
-    const phaseIncrement = this.frequency / this.sampleRate;
+    
+    const phaseIncrement = this.dspValues.frequency / this.sampleRate; 
+    const currentLoopGain = this.dspValues.loopGain;
+    const currentPulseWidth = this.dspValues.pulseWidth;
+    const currentExciteIntensity = this.dspValues.exciteIntensity;
+    const currentBpfBankMix = this.dspValues.bpfBankMix; 
+    const currentSawPulseMix = this.dspValues.sawPulseMix;
+    const currentToneNoiseMix = this.dspValues.toneNoiseMix;
 
     for (let i = 0; i < outputChannel.length; i++) {
-      const x_n = this.delayLine[this.currentIndex];
-
+      const x_n = this.delayLine[this.currentIndex]; 
+      
       const y_n_lpf = this.lpf_b0 * x_n + this.lpf_z1;
       this.lpf_z1 = (this.lpf_b1 * x_n) - (this.lpf_a1 * y_n_lpf) + this.lpf_z2;
       this.lpf_z2 = (this.lpf_b2 * x_n) - (this.lpf_a2 * y_n_lpf);
-
+      
       let y_n_bpf_summed = 0.0;
       for (let ch = 0; ch < this.numBpfChannels; ch++) {
           const y_n_bpf_ch = this.bp_b0[ch] * x_n + this.bp_z1_state[ch];
@@ -211,28 +223,27 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
           this.bp_z2_state[ch] = (this.bp_b2[ch] * x_n) - (this.bp_a2[ch] * y_n_bpf_ch);
           y_n_bpf_summed += y_n_bpf_ch;
       }
-      if (this.numBpfChannels > 0) {
-          y_n_bpf_summed /= this.numBpfChannels;
+      if (this.numBpfChannels > 0) { 
+          // y_n_bpf_summed /= this.numBpfChannels; // Temporarily removed for testing Q=0.707 silence
       }
 
-      const y_n_combined = (y_n_lpf * (1.0 - this.bpfBankMixLevelParam)) + (y_n_bpf_summed * this.bpfBankMixLevelParam);
-
-      outputChannel[i] = y_n_combined;
-      let feedbackSample = y_n_combined * this.loopGain;
-
+      const y_n_combined = (y_n_lpf * (1.0 - currentBpfBankMix)) + (y_n_bpf_summed * currentBpfBankMix);
+      
+      outputChannel[i] = y_n_combined; 
+      let feedbackSample = y_n_combined * currentLoopGain;
+ 
       if (this.isBowing) {
         const sawtoothSignal = (this.sawPhase * 2.0) - 1.0;
-        const actualPulseWidth = Math.max(0.01, Math.min(0.99, this.pulseWidthParam));
-        let pulseSignal = (this.sawPhase < actualPulseWidth) ? 1.0 : -1.0;
-        pulseSignal = -pulseSignal;
-
+        let pulseSignal = (this.sawPhase < currentPulseWidth) ? 1.0 : -1.0; 
+        pulseSignal = -pulseSignal; 
+        
         this.sawPhase += phaseIncrement;
         if (this.sawPhase >= 1.0) this.sawPhase -= 1.0;
-
+        
         const noiseSignal = (Math.random() * 2 - 1);
-        const combinedTone = (sawtoothSignal * this.sawPulseMixParam) + (pulseSignal * (1.0 - this.sawPulseMixParam));
-        const finalExcitationMix = (combinedTone * this.toneNoiseMixParam) + (noiseSignal * (1.0 - this.toneNoiseMixParam));
-        feedbackSample += finalExcitationMix * this.bowForce;
+        const combinedTone = (sawtoothSignal * currentSawPulseMix) + (pulseSignal * (1.0 - currentSawPulseMix));
+        const finalExcitationMix = (combinedTone * currentToneNoiseMix) + (noiseSignal * (1.0 - currentToneNoiseMix));
+        feedbackSample += finalExcitationMix * currentExciteIntensity;
       }
       this.delayLine[this.currentIndex] = Math.max(-1.0, Math.min(1.0, feedbackSample));
       this.currentIndex = (this.currentIndex + 1) % this.delaySamples;
