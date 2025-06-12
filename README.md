@@ -2,7 +2,7 @@
 
 This project is an experiment in creating a bowed string synthesizer using the Web Audio API, specifically `AudioContext` and `AudioWorkletProcessor`. We are incrementally building up a physical model to explore different synthesis techniques.
 
-## Current Status (as of end of session 2024-05-04)
+## Current Status (as of end of session 2024-05-04 - Modal Controls Update)
 <!-- Please update date as needed -->
 
 The synthesizer currently implements the following:
@@ -29,11 +29,14 @@ The synthesizer currently implements the following:
         *   "LPF Reso" (`resonanceParam`): UI slider (0-1) maps via a power curve (cubed) to Q (actual Q max ~2.5).
     *   **Modal Body Resonator (3 modes):**
         *   Three biquad Band-Pass Filters operating in parallel, simulating prominent body modes.
-        *   Mode Parameters (Frequency, Q, Gain):
-            *   Mode 1 (A0 "Air"): ~280 Hz, Q=10, Relative Gain=0.8
-            *   Mode 2 (B1- "Wood"): ~460 Hz, Q=15, Relative Gain=1.0
-            *   Mode 3 (B1+ "Wood"): ~550 Hz, Q=12, Relative Gain=0.9
-        *   These modal parameters are currently fixed in `basic-processor.js`.
+        *   Default Mode Parameters (Base Frequencies before UI control, Q, Gain):
+            *   Mode 1: Base C#4 (~277 Hz), Base Q=10, Relative Gain=0.8
+            *   Mode 2: Base A#4 (~466 Hz), Base Q=15, Relative Gain=1.0
+            *   Mode 3: Base C#5 (~554 Hz), Base Q=12, Relative Gain=0.9
+        *   UI Controls for Modal Body:
+            *   **Mode 1/2/3 Freq Select:** Three dropdown menus, each allowing selection of the center frequency for one mode from a 12-note (1-octave) 12-TET range. The ranges are centered around the base frequencies listed above.
+            *   **Body Mode Q:** A slider that globally scales the Q values of all three modes (0.25x to 4.0x of their base Qs).
+        *   Relative gains for each mode are currently fixed.
         *   Coefficient Type: BPFs are designed for a peak gain of 1 (0dB) at their center frequency, then scaled by the mode's specific "Relative Gain". Q controls bandwidth.
         *   Summing & Mixing: Outputs of the three modal BPFs are summed (not averaged). This sum is then mixed with the LPF output via the "Body Reso Mix" UI slider (`bpfBankMixLevelParam` 0-1).
     *   The combined LPF + Modal Body signal is then processed by `loopGain` and has excitation added.
@@ -45,7 +48,9 @@ The synthesizer currently implements the following:
 
 **User Interface (`index.html` & `main.js`):**
 
-*   Sliders for key synthesis parameters with real-time numeric value display. (Note: The "Body Resos Q" slider has been removed as modal Q values are currently fixed).
+*   Sliders and dropdowns for key synthesis parameters with real-time numeric value display.
+    *   Modal body frequencies are controlled by three independent dropdown selectors.
+    *   A "Body Mode Q" slider globally scales the Q of the modal body resonators.
 *   "Start Audio" / "Suspend Audio" button.
 *   "Start Bowing" / "Stop Bowing" button.
 
@@ -59,16 +64,18 @@ The synthesizer currently implements the following:
 
 ## Known Issues / Quirks:
 
-*   **Modal Parameters Fixed:** The frequencies, Q values, and gains for the modal body resonator are currently hardcoded in `basic-processor.js`.
-*   Interactions between `loopGain` and the new modal body resonator (especially with its fixed gains) can still lead to strong resonances, requiring careful adjustment of the "Body Reso Mix" and `loopGain`.
+*   **Parameter Change Glitches:** Abrupt changes to parameters (especially LPF, modal Q, and modal frequencies via dropdowns) can cause audible clicks or discontinuities. Parameter smoothing in the processor is needed.
+*   **Modal Gains Fixed:** The relative gains for each of the three body modes are currently hardcoded in `basic-processor.js`.
+*   Interactions between `loopGain` and the modal body resonator (especially with its current gains and Q range) can still lead to strong resonances, requiring careful adjustment of the "Body Reso Mix" and `loopGain`.
 
 ## Potential Next Steps for Tomorrow/Future:
 
-1.  **Enhance Modal Body Resonator:**
-    *   Expose UI controls for modal body parameters (e.g., global Q scale, individual mode tuning/gain, or a "body size" meta-parameter).
-    *   Investigate adding more modes to the body resonator for increased realism.
-    *   Explore dynamic modulation of modal parameters.
-2.  **Dynamic "Gestural" Control:**
+1.  **Parameter Smoothing:** Implement parameter smoothing in `basic-processor.js` for all key UI-controlled parameters to eliminate audio glitches on change.
+2.  **Enhance Modal Body Resonator:**
+    *   Consider UI controls for individual mode gains.
+    *   Investigate adding more modes to the body resonator.
+    *   Explore dynamic modulation of modal parameters based on performance gestures.
+3.  **Dynamic \"Gestural\" Control:**
     *   Link "Excite Intensity" (`dspValues.exciteIntensity`) to modulate "LPF Cutoff" (`dspValues.lpfCutoff`) slightly (brighter with more intensity).
     *   Explore other simple parameter intermodulations.
 4.  **Refine Excitation:**
