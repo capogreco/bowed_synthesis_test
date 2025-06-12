@@ -206,64 +206,39 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
       _recalculateAllCoefficientsIfNeeded(parameters) {
         let needsRecalcLpf = false;
         let needsRecalcModal = false;
-        const descriptors = ContinuousExcitationProcessor.parameterDescriptors;
         const tolerance = 1e-6; // Small tolerance for floating point comparison
 
-        const lpfCutoffDesc = descriptors.find(p => p.name === 'lpfCutoff');
         let lpfCutoffVal = parameters.lpfCutoff[0];
-        if (lpfCutoffDesc && lpfCutoffVal < lpfCutoffDesc.minValue) {
-            lpfCutoffVal = lpfCutoffDesc.minValue;
-        }
         if (Math.abs(lpfCutoffVal - this._cachedLpfCutoff) > tolerance) {
             this._cachedLpfCutoff = lpfCutoffVal;
             needsRecalcLpf = true;
         }
 
-        const lpfQDesc = descriptors.find(p => p.name === 'lpfQ');
         let lpfQVal = parameters.lpfQ[0];
-        if (lpfQDesc && lpfQVal < lpfQDesc.minValue) {
-            lpfQVal = lpfQDesc.minValue;
-        }
         if (Math.abs(lpfQVal - this._cachedLpfQ) > tolerance) {
             this._cachedLpfQ = lpfQVal;
             needsRecalcLpf = true;
         }
 
-        const bodyModeQScaleDesc = descriptors.find(p => p.name === 'bodyModeQScale');
         let bodyModeQScaleVal = parameters.bodyModeQScale[0];
-        if (bodyModeQScaleDesc && bodyModeQScaleVal < bodyModeQScaleDesc.minValue) {
-            bodyModeQScaleVal = bodyModeQScaleDesc.minValue;
-        }
         if (Math.abs(bodyModeQScaleVal - this._cachedBodyModeQScale) > tolerance) {
             this._cachedBodyModeQScale = bodyModeQScaleVal;
             needsRecalcModal = true;
         }
 
-        const bodyMode1FreqDesc = descriptors.find(p => p.name === 'bodyMode1Freq');
         let bodyMode1FreqVal = parameters.bodyMode1Freq[0];
-        if (bodyMode1FreqDesc && bodyMode1FreqVal < bodyMode1FreqDesc.minValue) {
-            bodyMode1FreqVal = bodyMode1FreqDesc.minValue;
-        }
         if (Math.abs(bodyMode1FreqVal - this._cachedBodyMode1Freq) > tolerance) {
             this._cachedBodyMode1Freq = bodyMode1FreqVal;
             needsRecalcModal = true;
         }
 
-        const bodyMode2FreqDesc = descriptors.find(p => p.name === 'bodyMode2Freq');
         let bodyMode2FreqVal = parameters.bodyMode2Freq[0];
-        if (bodyMode2FreqDesc && bodyMode2FreqVal < bodyMode2FreqDesc.minValue) {
-            bodyMode2FreqVal = bodyMode2FreqDesc.minValue;
-        }
         if (Math.abs(bodyMode2FreqVal - this._cachedBodyMode2Freq) > tolerance) {
             this._cachedBodyMode2Freq = bodyMode2FreqVal;
             needsRecalcModal = true;
         }
 
-        const bodyMode3FreqDesc = descriptors.find(p => p.name === 'bodyMode3Freq');
         let bodyMode3FreqVal = parameters.bodyMode3Freq[0];
-        if (bodyMode3FreqDesc && bodyMode3FreqVal < bodyMode3FreqDesc.minValue) {
-            bodyMode3FreqVal = bodyMode3FreqDesc.minValue;
-        }
         if (Math.abs(bodyMode3FreqVal - this._cachedBodyMode3Freq) > tolerance) {
             this._cachedBodyMode3Freq = bodyMode3FreqVal;
             needsRecalcModal = true;
