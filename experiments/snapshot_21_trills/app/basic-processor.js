@@ -14,25 +14,13 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
       { name: 'stringMaterial', defaultValue: 0, minValue: 0, maxValue: 3, automationRate: 'k-rate' }, // 0=steel, 1=gut, 2=nylon, 3=wound
       
       // --- Vibrato parameters ---
-      { name: 'vibratoEnabled', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' }, // 0=off, 1=on
       { name: 'vibratoRate', defaultValue: 5.0, minValue: 0.0, maxValue: 10.0, automationRate: 'k-rate' }, // Hz
       { name: 'vibratoDepth', defaultValue: 0.0, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' }, // 0-1
-      // TODO: Future enhancement - Add asymmetric vibrato waveshaping
-      // - vibratoShape: 0=sine, 0.5=triangle, 1=square
-      // - vibratoAsymmetry: -1=faster up/slower down, 0=symmetric, 1=slower up/faster down
-      // - vibratoOnset: 0=immediate, 1=gradual (fade in over first second)
       
       // --- Trill parameters ---
       { name: 'trillEnabled', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' }, // 0=off, 1=on
       { name: 'trillInterval', defaultValue: 1, minValue: 1, maxValue: 12, automationRate: 'k-rate' }, // semitones above base note
       { name: 'trillSpeed', defaultValue: 5.0, minValue: 3.0, maxValue: 12.0, automationRate: 'k-rate' }, // Hz
-      { name: 'trillArticulation', defaultValue: 0.7, minValue: 0.1, maxValue: 0.95, automationRate: 'k-rate' }, // 0.1=very separated, 0.95=very connected
-      
-      // --- Tremolo parameters ---
-      { name: 'tremoloEnabled', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' }, // 0=off, 1=on
-      { name: 'tremoloSpeed', defaultValue: 4.0, minValue: 1.0, maxValue: 12.0, automationRate: 'k-rate' }, // Hz
-      { name: 'tremoloDepth', defaultValue: 0.7, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' }, // 0-1
-      { name: 'tremoloArticulation', defaultValue: 0.5, minValue: 0.01, maxValue: 0.99, automationRate: 'k-rate' }, // 0.01=extreme staccato, 0.99=extreme legato
       
       // --- Instrument Body ---
       { name: 'bodyType', defaultValue: 0, minValue: 0, maxValue: 4, automationRate: 'k-rate' }, // 0=violin, 1=viola, 2=cello, 3=guitar, 4=none
@@ -91,16 +79,6 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
     this.trillRampFactor = 0.0; // For gradual speed changes
     this.trillCurrentSpeed = 3.0; // Start at minimum speed
     this.lastTrillState = 0; // Track if we're on upper or lower note
-    
-    // Tremolo state
-    this.tremoloPhase = 0.0;
-    this.tremoloActive = false;
-    this.tremoloRampFactor = 0.0;
-    this.tremoloStrokeCount = 0;
-    this.lastTremoloState = 0;
-    this.tremoloGroupPhase = 0.0; // For natural grouping accents
-    this.tremoloScratchiness = 0.0;
-    this.tremoloBowSpeed = 1.0;
     
     // --- LPF State ---
     this.lpf_b0 = 1; this.lpf_b1 = 0; this.lpf_b2 = 0; 
@@ -420,7 +398,6 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
     const bowSpeed = parameters.bowSpeed[0];
     
     // Vibrato parameters
-    const vibratoEnabled = parameters.vibratoEnabled[0] > 0.5;
     const vibratoRate = parameters.vibratoRate[0];
     const vibratoDepth = parameters.vibratoDepth[0];
     
@@ -428,16 +405,9 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
     const trillEnabled = parameters.trillEnabled[0] > 0.5;
     const trillInterval = Math.round(parameters.trillInterval[0]); // 1-12 semitones
     const trillTargetSpeed = parameters.trillSpeed[0];
-    const trillArticulation = parameters.trillArticulation[0]; // 0.1=separated, 0.95=connected
     
-    // Tremolo parameters
-    const tremoloEnabled = parameters.tremoloEnabled[0] > 0.5;
-    const tremoloSpeed = parameters.tremoloSpeed[0];
-    const tremoloDepth = parameters.tremoloDepth[0];
-    const tremoloArticulation = parameters.tremoloArticulation[0]; // 0.01=extreme staccato, 0.99=extreme legato
-    
-    // Update vibrato phase (only if vibrato is enabled and trill/tremolo are not active)
-    const vibratoIncrement = (vibratoEnabled && !trillEnabled && !tremoloEnabled ? vibratoRate : 0) / this.sampleRate;
+    // Update vibrato phase (only if trill is not active)
+    const vibratoIncrement = (!trillEnabled ? vibratoRate : 0) / this.sampleRate;
     
     // Dynamic bow physics
     // Bow force affects brightness and noise
@@ -468,7 +438,7 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
       let pitchModulation = 1.0;
       let ampModulation = 1.0;
       
-      if (vibratoEnabled && !trillEnabled && !tremoloEnabled) {
+      if (!trillEnabled) {
         pitchModulation = 1.0 + (vibratoValue * vibratoDepth * 0.06); // ±6% pitch
         ampModulation = 1.0 + (vibratoValue * vibratoDepth * 0.2); // ±20% amplitude
       }
@@ -512,35 +482,18 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
           this.trillPhase -= 1.0;
         }
         
-        // Determine if we're on upper or lower note with articulation control
-        // For articulation, we adjust how much of each phase is "active"
-        let isActivePhase = false;
-        let currentTrillState;
-        
-        if (this.trillPhase < 0.5) {
-          // First half - lower note
-          currentTrillState = 0;
-          isActivePhase = this.trillPhase < (0.5 * trillArticulation);
-        } else {
-          // Second half - upper note
-          currentTrillState = 1;
-          const adjustedPhase = this.trillPhase - 0.5;
-          isActivePhase = adjustedPhase < (0.5 * trillArticulation);
-        }
-        
+        // Determine if we're on upper or lower note (square-ish wave)
+        const currentTrillState = this.trillPhase < 0.5 ? 0 : 1;
         const trillTransition = currentTrillState !== this.lastTrillState;
         this.lastTrillState = currentTrillState;
         
         // Calculate pitch change - base note is the lower pitch
-        if (currentTrillState === 1 && isActivePhase) {
+        if (currentTrillState === 1) {
           // Upper note - trill interval above base
           pitchModulation = Math.pow(2, trillInterval / 12.0);
-        } else if (currentTrillState === 0 && isActivePhase) {
+        } else {
           // Lower note (base pitch)
           pitchModulation = 1.0;
-        } else {
-          // In gap - maintain previous pitch to avoid glitches
-          pitchModulation = currentTrillState === 1 ? Math.pow(2, trillInterval / 12.0) : 1.0;
         }
         
         // Debug logging - log state transitions
@@ -548,11 +501,9 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
           console.log('[Trill Debug] State:', currentTrillState, 'Pitch mod:', pitchModulation.toFixed(3), 'Interval:', trillInterval, 'Phase:', this.trillPhase.toFixed(3));
         }
         
-        // Amplitude effects for hammer-on/lift-off with articulation
-        if (!isActivePhase) {
-          // In gap between notes
-          ampModulation = 0.1; // Very quiet during gaps
-        } else if (currentTrillState === 1) {
+        // Amplitude effects for hammer-on/lift-off
+        // Upper note should be louder throughout its duration
+        if (currentTrillState === 1) {
           // Upper note (hammered on) - much louder to compensate for psychoacoustic effects
           ampModulation = 1.5;
         } else {
@@ -563,120 +514,6 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
         // Apply ramp factor to smooth enable/disable
         pitchModulation = 1.0 + (pitchModulation - 1.0) * this.trillRampFactor;
         ampModulation = 1.0 + (ampModulation - 1.0) * this.trillRampFactor;
-      }
-      
-      // Handle tremolo
-      if (tremoloEnabled) {
-        if (this.tremoloRampFactor < 1.0) {
-          this.tremoloRampFactor = Math.min(1.0, this.tremoloRampFactor + 0.003); // ~0.3s ramp
-        }
-        this.tremoloActive = true;
-      } else {
-        if (this.tremoloRampFactor > 0.0) {
-          this.tremoloRampFactor = Math.max(0.0, this.tremoloRampFactor - 0.005);
-        }
-        if (this.tremoloRampFactor === 0.0) {
-          this.tremoloActive = false;
-          this.tremoloPhase = 0.0;
-          this.tremoloStrokeCount = 0;
-        }
-      }
-      
-      if (this.tremoloActive || this.tremoloRampFactor > 0) {
-        // Add slight timing variations for realism
-        const timingVariation = 1.0 + (Math.random() - 0.5) * 0.15;
-        const tremoloIncrement = (tremoloSpeed * timingVariation) / this.sampleRate;
-        
-        this.tremoloPhase += tremoloIncrement;
-        if (this.tremoloPhase >= 1.0) {
-          this.tremoloPhase -= 1.0;
-          this.tremoloStrokeCount++;
-        }
-        
-        // Determine bow direction (up/down)
-        const currentTremoloState = this.tremoloPhase < 0.5 ? 0 : 1;
-        const tremoloTransition = currentTremoloState !== this.lastTremoloState;
-        this.lastTremoloState = currentTremoloState;
-        
-        // Natural grouping - slight accent every 3-4 strokes
-        const groupSize = 3 + Math.floor(Math.random() * 2); // 3 or 4
-        const isAccented = (this.tremoloStrokeCount % groupSize) === 0;
-        
-        // Model bow speed changes through the stroke cycle
-        // Bow slows to zero at turnaround points (0 and 0.5)
-        let bowSpeedFactor = 1.0;
-        
-        // Adjust phase mapping based on articulation
-        // For extreme staccato (0.01), stroke takes up only 1% of cycle
-        // For extreme legato (0.99), stroke takes up 99% of cycle
-        let phaseInStroke;
-        if (currentTremoloState === 0) {
-          // First half of cycle
-          if (this.tremoloPhase < tremoloArticulation * 0.5) {
-            // Active stroke portion
-            phaseInStroke = this.tremoloPhase / (tremoloArticulation * 0.5);
-          } else {
-            // Gap portion - bow speed is zero
-            phaseInStroke = 1.0;
-          }
-        } else {
-          // Second half of cycle
-          const adjustedPhase = this.tremoloPhase - 0.5;
-          if (adjustedPhase < tremoloArticulation * 0.5) {
-            // Active stroke portion
-            phaseInStroke = adjustedPhase / (tremoloArticulation * 0.5);
-          } else {
-            // Gap portion - bow speed is zero
-            phaseInStroke = 1.0;
-          }
-        }
-        
-        // Calculate bow speed based on phase
-        if (phaseInStroke < 1.0) {
-          // Active stroke - use raised sine for longer turnarounds
-          bowSpeedFactor = Math.pow(Math.sin(phaseInStroke * Math.PI), 2.5);
-        } else {
-          // In gap - minimal bow speed
-          bowSpeedFactor = 0.0;
-        }
-        
-        // Much more aggressive scratchiness at low speeds
-        const nearTurnaround = bowSpeedFactor < 0.5;
-        let scratchiness = 0.0;
-        if (nearTurnaround) {
-          // Extreme noise and irregularity at low bow speeds
-          scratchiness = Math.pow((0.5 - bowSpeedFactor) * 2.0, 1.5); // 0 to 1.4
-        }
-        
-        // Calculate amplitude for tremolo - more extreme dynamics
-        let tremoloAmp = 0.5 + bowSpeedFactor * 0.7; // 0.5 to 1.2
-        
-        // Create more pronounced gap at turnaround points and during gaps
-        if (bowSpeedFactor < 0.15) {
-          // Much quieter at direction change
-          tremoloAmp = 0.05 + bowSpeedFactor * 0.5;
-        } else if (phaseInStroke >= 1.0) {
-          // In gap between strokes
-          tremoloAmp = 0.02;
-        }
-        
-        // Simulate increased bow pressure during tremolo
-        const tremoloPressureBoost = 1.3;
-        
-        // Add accent on grouped notes
-        if (isAccented && bowSpeedFactor > 0.5) {
-          tremoloAmp += 0.2;
-        }
-        
-        // Apply depth control
-        tremoloAmp = 1.0 + (tremoloAmp - 1.0) * tremoloDepth;
-        
-        // Apply tremolo amplitude modulation with pressure boost
-        ampModulation *= tremoloAmp * this.tremoloRampFactor * tremoloPressureBoost;
-        
-        // Store scratchiness for use in excitation
-        this.tremoloScratchiness = scratchiness;
-        this.tremoloBowSpeed = bowSpeedFactor;
       }
       
       // Generate continuous bow excitation when bowing
@@ -711,22 +548,10 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
         const toneSignal = complexTone * 0.85 + friction * 0.15;
         
         // Add noise
-        let noiseSignal = Math.random() * 2.0 - 1.0;
-        
-        // Add extra scratchiness during tremolo turnarounds
-        if (this.tremoloActive && this.tremoloScratchiness > 0) {
-          // Much more aggressive scratch noise
-          const scratchNoise = (Math.random() - 0.5) * this.tremoloScratchiness * 2.0;
-          noiseSignal = noiseSignal * (1.0 + this.tremoloScratchiness * 2.0) + scratchNoise;
-        }
+        const noiseSignal = Math.random() * 2.0 - 1.0;
         
         // Mix tone and noise based on physical parameters
-        let effectiveNoiseMix = toneNoiseMix;
-        if (this.tremoloActive) {
-          // Much more noise during tremolo, especially at low bow speeds
-          effectiveNoiseMix = Math.max(0.2, Math.min(1, toneNoiseMix - 0.3 - this.tremoloScratchiness * 0.7));
-        }
-        const mixedExcitation = toneSignal * effectiveNoiseMix + noiseSignal * (1.0 - effectiveNoiseMix);
+        const mixedExcitation = toneSignal * toneNoiseMix + noiseSignal * (1.0 - toneNoiseMix);
         
         // Apply bow force with envelope and amplitude vibrato
         excitationSignal = mixedExcitation * bowForce * this.bowEnvelope * ampModulation;
@@ -758,14 +583,6 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
         // Add brightness on trill hammer-ons
         if (this.trillActive && this.lastTrillState === 1 && this.trillPhase < 0.1) {
           brightnessBoost += 0.2 * this.trillRampFactor;
-        }
-        
-        // Add brightness changes based on tremolo bow speed
-        if (this.tremoloActive) {
-          // Much darker at turnarounds, brighter in middle of stroke
-          brightnessBoost += (this.tremoloBowSpeed - 0.5) * 0.4 * this.tremoloRampFactor;
-          // Overall darker tone during tremolo (high pressure dulls the sound)
-          brightnessBoost -= 0.2 * this.tremoloRampFactor;
         }
         
         const dynamicBrightness = Math.min(1.0, brightness * (1.0 + brightnessBoost));

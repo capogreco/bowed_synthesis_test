@@ -124,42 +124,6 @@
             border-top: 1px solid #ecf0f1; 
             margin: 20px 0 15px 0; 
         }
-        .expression-group {
-            background-color: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 6px;
-            padding: 12px;
-            margin: 10px 0;
-        }
-        .expression-group.vibrato {
-            border-color: #3498db;
-            background-color: #ebf5fb;
-        }
-        .expression-group.trill {
-            border-color: #9b59b6;
-            background-color: #f4ecf7;
-        }
-        .expression-group.tremolo {
-            border-color: #e67e22;
-            background-color: #fdf2e9;
-        }
-        .expression-group-title {
-            font-size: 0.85em;
-            font-weight: 600;
-            color: #666;
-            margin-bottom: 10px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .expression-group.vibrato .expression-group-title {
-            color: #2980b9;
-        }
-        .expression-group.trill .expression-group-title {
-            color: #7d3c98;
-        }
-        .expression-group.tremolo .expression-group-title {
-            color: #d35400;
-        }
     </style>
 </head>
 <body>
@@ -230,44 +194,24 @@
                     <span id="brightnessValue" class="value-display">0.50</span>
                 </div>
                 <div class="control-group">
-                    <label>Expression</label>
-                    <div style="display: flex; gap: 15px; align-items: center;">
-                        <label style="font-weight: normal; margin: 0;">
-                            <input type="radio" name="expression" value="none" checked> None
-                        </label>
-                        <label style="font-weight: normal; margin: 0;">
-                            <input type="radio" name="expression" value="vibrato"> Vibrato
-                        </label>
-                        <label style="font-weight: normal; margin: 0;">
-                            <input type="radio" name="expression" value="trill"> Trill
-                        </label>
-                        <label style="font-weight: normal; margin: 0;">
-                            <input type="radio" name="expression" value="tremolo"> Tremolo
-                        </label>
-                    </div>
-                    <span></span>
-                </div>
-                
-                <div class="expression-group vibrato">
-                    <div class="expression-group-title">Vibrato Parameters</div>
-                    <div class="control-group">
-                        <label for="vibratoRate">Rate</label>
+                    <label for="vibratoRate">Vibrato Rate</label>
                     <input type="range" id="vibratoRate" value="5.0" min="0.0" max="10.0" step="0.1"
                            data-dsp-min="0.0" data-dsp-max="10.0" data-dsp-decimals="1">
                     <span id="vibratoRateValue" class="value-display">5.0</span>
                 </div>
                 <div class="control-group">
-                    <label for="vibratoDepth">Depth</label>
+                    <label for="vibratoDepth">Vibrato Depth</label>
                     <input type="range" id="vibratoDepth" value="0.0" min="0.0" max="1.0" step="0.01"
                            data-dsp-min="0.0" data-dsp-max="1.0" data-dsp-decimals="2">
                     <span id="vibratoDepthValue" class="value-display">0.00</span>
-                    </div>
                 </div>
-                
-                <div class="expression-group trill">
-                    <div class="expression-group-title">Trill Parameters</div>
-                    <div class="control-group">
-                        <label for="trillInterval">Interval</label>
+                <div class="control-group">
+                    <label for="trillEnabled">Trill</label>
+                    <input type="checkbox" id="trillEnabled" style="width: auto; margin: 0;">
+                    <span></span>
+                </div>
+                <div class="control-group">
+                    <label for="trillInterval">Trill Interval</label>
                     <select id="trillInterval">
                         <option value="1">Minor 2nd</option>
                         <option value="2">Major 2nd</option>
@@ -285,39 +229,10 @@
                     <span id="trillIntervalValue" class="value-display">m2</span>
                 </div>
                 <div class="control-group">
-                    <label for="trillSpeed">Speed</label>
+                    <label for="trillSpeed">Trill Speed</label>
                     <input type="range" id="trillSpeed" value="5.0" min="3.0" max="12.0" step="0.1"
                            data-dsp-min="3.0" data-dsp-max="12.0" data-dsp-decimals="1">
                     <span id="trillSpeedValue" class="value-display">5.0</span>
-                </div>
-                <div class="control-group">
-                    <label for="trillArticulation">Articulation</label>
-                    <input type="range" id="trillArticulation" value="0.7" min="0.1" max="0.95" step="0.01"
-                           data-dsp-min="0.1" data-dsp-max="0.95" data-dsp-decimals="2">
-                    <span id="trillArticulationValue" class="value-display">0.70</span>
-                    </div>
-                </div>
-                
-                <div class="expression-group tremolo">
-                    <div class="expression-group-title">Tremolo Parameters</div>
-                    <div class="control-group">
-                        <label for="tremoloSpeed">Speed</label>
-                    <input type="range" id="tremoloSpeed" value="4.0" min="1.0" max="12.0" step="0.1"
-                           data-dsp-min="1.0" data-dsp-max="12.0" data-dsp-decimals="1">
-                    <span id="tremoloSpeedValue" class="value-display">4.0</span>
-                </div>
-                <div class="control-group">
-                    <label for="tremoloDepth">Depth</label>
-                    <input type="range" id="tremoloDepth" value="0.7" min="0.0" max="1.0" step="0.01"
-                           data-dsp-min="0.0" data-dsp-max="1.0" data-dsp-decimals="2">
-                    <span id="tremoloDepthValue" class="value-display">0.70</span>
-                </div>
-                <div class="control-group">
-                    <label for="tremoloArticulation">Articulation</label>
-                    <input type="range" id="tremoloArticulation" value="0.5" min="0.01" max="0.99" step="0.01"
-                           data-dsp-min="0.01" data-dsp-max="0.99" data-dsp-decimals="2">
-                    <span id="tremoloArticulationValue" class="value-display">0.50</span>
-                    </div>
                 </div>
             </div>
         </div>

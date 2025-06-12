@@ -29,12 +29,9 @@ const uiElementIds = [
     'brightness',       // Overall brightness control
     'vibratoRate',      // Vibrato rate in Hz
     'vibratoDepth',     // Vibrato depth 0-1
+    'trillEnabled',     // Trill on/off
     'trillInterval',    // Trill interval (semitone/whole tone)
     'trillSpeed',       // Trill speed in Hz
-    'trillArticulation', // Trill articulation (staccato/legato)
-    'tremoloSpeed',     // Tremolo speed in Hz
-    'tremoloDepth',     // Tremolo depth 0-1
-    'tremoloArticulation', // Tremolo articulation (staccato/legato)
     'bodyType',         // Instrument body type
     'bodyResonance'     // Body resonance amount
 ];
@@ -52,7 +49,13 @@ uiElementIds.forEach(id => {
 
 const allParamInputs = Object.values(uiElements).map(el => el.input).filter(Boolean);
 
-
+// Debug: Check if trill checkbox was found
+const trillCheckbox = uiElements['trillEnabled'];
+if (trillCheckbox) {
+    console.log('[DEBUG] Trill checkbox found:', trillCheckbox.input);
+} else {
+    console.log('[DEBUG] Trill checkbox NOT found!');
+}
 
 // --- Initialize Parameter Configurations from HTML Data Attributes ---
 function getProcessorParamName(htmlId) {
@@ -67,12 +70,9 @@ function getProcessorParamName(htmlId) {
         'brightness': 'brightness',
         'vibratoRate': 'vibratoRate',
         'vibratoDepth': 'vibratoDepth',
+        'trillEnabled': 'trillEnabled',
         'trillInterval': 'trillInterval',
         'trillSpeed': 'trillSpeed',
-        'trillArticulation': 'trillArticulation',
-        'tremoloSpeed': 'tremoloSpeed',
-        'tremoloDepth': 'tremoloDepth',
-        'tremoloArticulation': 'tremoloArticulation',
         'bodyType': 'bodyType',
         'bodyResonance': 'bodyResonance'
     };
@@ -176,7 +176,10 @@ function updateParametersOnAudioThread() {
 
             const audioParam = workletNode.parameters.get(config.processorParamName);
             if (audioParam) {
-
+                // Debug trill parameter
+                if (config.processorParamName === 'trillEnabled') {
+                    console.log('[DEBUG] Setting trillEnabled AudioParam to:', newValue);
+                }
                 // All params are currently k-rate for MVP, fundamentalFrequency is a-rate but handled by its ramp
                 if (config.processorParamName === 'fundamentalFrequency') {
                     if (!isNaN(newValue) && newValue > 0 && newValue >= config.dspMin && newValue <= config.dspMax) {
@@ -337,47 +340,43 @@ if (bowingToggleButton) {
     });
 }
 
-// Handle expression radio buttons
-const expressionRadios = document.querySelectorAll('input[name="expression"]');
-expressionRadios.forEach(radio => {
-    radio.addEventListener('change', () => {
-        if (radio.checked) {
-            const workletReady = workletNode && audioContext && isAudioInitialized && audioContext.state === 'running';
-            if (!workletReady) return;
-            
-            // Set all expression enables to 0
-            const vibratoParam = workletNode.parameters.get('vibratoEnabled');
-            const trillParam = workletNode.parameters.get('trillEnabled');
-            const tremoloParam = workletNode.parameters.get('tremoloEnabled');
-            
-            if (vibratoParam) vibratoParam.setValueAtTime(0, audioContext.currentTime);
-            if (trillParam) trillParam.setValueAtTime(0, audioContext.currentTime);
-            if (tremoloParam) tremoloParam.setValueAtTime(0, audioContext.currentTime);
-            
-            // Enable the selected expression
-            switch(radio.value) {
-                case 'vibrato':
-                    if (vibratoParam) vibratoParam.setValueAtTime(1, audioContext.currentTime);
-                    break;
-                case 'trill':
-                    if (trillParam) trillParam.setValueAtTime(1, audioContext.currentTime);
-                    break;
-                case 'tremolo':
-                    if (tremoloParam) tremoloParam.setValueAtTime(1, audioContext.currentTime);
-                    break;
-            }
-        }
-    });
-});
-
 allParamInputs.forEach(inputElement => {
     if (inputElement) {
         // Handle both sliders and select dropdowns
-        const eventType = inputElement.tagName === 'SELECT' ? 'change' : 'input';
+        const eventType = inputElement.tagName === 'SELECT' ? 'change' : 
+                         inputElement.type === 'checkbox' ? 'change' : 'input';
         inputElement.addEventListener(eventType, () => {
             const paramKey = inputElement.id; 
             if (paramKey && paramConfigs[paramKey]) {
-                paramConfigs[paramKey].currentValue = parseFloat(inputElement.value);
+                // Handle checkbox differently
+                if (inputElement.type === 'checkbox') {
+                    paramConfigs[paramKey].currentValue = inputElement.checked ? 1 : 0;
+                } else {
+                    paramConfigs[paramKey].currentValue = parseFloat(inputElement.value);
+                }
+                
+                // Special handling for trill/vibrato mutual exclusion
+                if (paramKey === 'trillEnabled' && inputElement.checked) {
+                    console.log('[DEBUG] Trill enabled, value:', paramConfigs[paramKey].currentValue);
+                    // Disable vibrato when trill is enabled
+                    const vibratoDepthElement = document.getElementById('vibratoDepth');
+                    if (vibratoDepthElement) {
+                        vibratoDepthElement.value = 0;
+                        if (paramConfigs['vibratoDepth']) {
+                            paramConfigs['vibratoDepth'].currentValue = 0;
+                            updateAllDisplayValues();
+                        }
+                    }
+                } else if (paramKey === 'vibratoDepth' && parseFloat(inputElement.value) > 0) {
+                    // Disable trill when vibrato is active
+                    const trillCheckbox = document.getElementById('trillEnabled');
+                    if (trillCheckbox) {
+                        trillCheckbox.checked = false;
+                        if (paramConfigs['trillEnabled']) {
+                            paramConfigs['trillEnabled'].currentValue = 0;
+                        }
+                    }
+                }
                 
                 // Special handling for dropdown displays
                 if (paramKey === 'stringMaterial' && paramConfigs[paramKey].spanElement) {
