@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modal String Synthesizer - Diagnostic Test</title>
+    <style>
+        body { 
+            font-family: monospace; 
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        #console {
+            background-color: #000;
+            color: #0f0;
+            padding: 20px;
+            height: 400px;
+            overflow-y: auto;
+            border-radius: 5px;
+            white-space: pre-wrap;
+        }
+        .error { color: #f00; }
+        .warn { color: #ff0; }
+        .info { color: #0ff; }
+        button {
+            padding: 10px 20px;
+            margin: 10px 5px;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Modal String Synthesizer - Diagnostic Test</h1>
+    <button id="initAudio">Initialize Audio</button>
+    <button id="testTone">Test Tone (440Hz)</button>
+    <button id="testProcessor">Test Processor</button>
+    <button id="pluckString">Pluck String</button>
+    <button id="clearConsole">Clear Console</button>
+    
+    <h2>Console Output:</h2>
+    <div id="console"></div>
+
+    <script>
+        const consoleDiv = document.getElementById('console');
+        
+        // Override console methods to display in page
+        const originalLog = console.log;
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        
+        function addToConsole(msg, type = 'log') {
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type === 'error' ? 'error' : type === 'warn' ? 'warn' : 'info';
+            consoleDiv.innerHTML += `<span class="${className}">[${timestamp}] ${msg}</span>\n`;
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+            
+            // Also call original console method
+            if (type === 'error') originalError(msg);
+            else if (type === 'warn') originalWarn(msg);
+            else originalLog(msg);
+        }
+        
+        console.log = (msg) => addToConsole(msg, 'log');
+        console.error = (msg) => addToConsole(msg, 'error');
+        console.warn = (msg) => addToConsole(msg, 'warn');
+        
+        let audioContext = null;
+        let workletNode = null;
+        let oscillator = null;
+        
+        document.getElementById('clearConsole').addEventListener('click', () => {
+            consoleDiv.innerHTML = '';
+        });
+        
+        document.getElementById('initAudio').addEventListener('click', async () => {
+            try {
+                console.log('Creating AudioContext...');
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                console.log(`AudioContext created: state=${audioContext.state}, sampleRate=${audioContext.sampleRate}`);
+                
+                if (audioContext.state === 'suspended') {
+                    console.log('Resuming suspended AudioContext...');
+                    await audioContext.resume();
+                    console.log(`AudioContext resumed: state=${audioContext.state}`);
+                }
+                
+                console.log('Audio initialized successfully!');
+            } catch (e) {
+                console.error(`Error initializing audio: ${e.message}`);
+            }
+        });
+        
+        document.getElementById('testTone').addEventListener('click', () => {
+            if (!audioContext) {
+                console.error('AudioContext not initialized!');
+                return;
+            }
+            
+            try {
+                if (oscillator) {
+                    oscillator.stop();
+                    oscillator = null;
+                    console.log('Stopped test tone');
+                    return;
+                }
+                
+                console.log('Creating test tone at 440Hz...');
+                oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                
+                oscillator.frequency.value = 440;
+                gainNode.gain.value = 0.1;
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                
+                oscillator.start();
+                console.log('Test tone playing - click again to stop');
+            } catch (e) {
+                console.error(`Error creating test tone: ${e.message}`);
+            }
+        });
+        
+        document.getElementById('testProcessor').addEventListener('click', async () => {
+            if (!audioContext) {
+                console.error('AudioContext not initialized!');
+                return;
+            }
+            
+            try {
+                console.log('Loading AudioWorklet module...');
+                await audioContext.audioWorklet.addModule('../app/basic-processor.js');
+                console.log('AudioWorklet module loaded successfully');
+                
+                console.log('Creating AudioWorkletNode...');
+                workletNode = new AudioWorkletNode(audioContext, 'continuous-excitation-processor');
+                console.log('AudioWorkletNode created successfully');
+                
+                // List all available parameters
+                console.log('Available AudioParams:');
+                for (const [key, param] of workletNode.parameters) {
+                    console.log(`  ${key}: defaultValue=${param.defaultValue}, value=${param.value}`);
+                }
+                
+                // Connect to output
+                workletNode.connect(audioContext.destination);
+                console.log('Processor connected to audio output');
+                
+                // Set some initial parameter values
+                const fundamentalFreq = workletNode.parameters.get('fundamentalFrequency');
+                if (fundamentalFreq) {
+                    fundamentalFreq.value = 220;
+                    console.log('Set fundamental frequency to 220 Hz');
+                }
+                
+            } catch (e) {
+                console.error(`Error loading processor: ${e.message}`);
+                console.error(`Stack trace: ${e.stack}`);
+            }
+        });
+        
+        document.getElementById('pluckString').addEventListener('click', () => {
+            if (!workletNode) {
+                console.error('Processor not loaded!');
+                return;
+            }
+            
+            try {
+                console.log('Sending pluck message to processor...');
+                workletNode.port.postMessage({ type: 'pluckString' });
+                console.log('Pluck message sent');
+                
+                // Monitor output
+                console.log('Current parameter values:');
+                for (const [key, param] of workletNode.parameters) {
+                    console.log(`  ${key}: ${param.value}`);
+                }
+            } catch (e) {
+                console.error(`Error sending pluck: ${e.message}`);
+            }
+        });
+        
+        // Add error listener for uncaught errors
+        window.addEventListener('error', (e) => {
+            console.error(`Uncaught error: ${e.message} at ${e.filename}:${e.lineno}:${e.colno}`);
+        });
+        
+        console.log('Diagnostic page loaded - Click "Initialize Audio" to begin');
+    </script>
+</body>
+</html>
