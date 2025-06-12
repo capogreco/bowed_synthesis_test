@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modal String Synthesizer (MVP)</title>
+    <style>
+        body { 
+            font-family: sans-serif; display: flex; flex-direction: column; 
+            align-items: center; margin-top: 15px; background-color: #f4f4f4; color: #333;
+        }
+        h1 { color: #2c3e50; margin-bottom: 10px; font-size: 1.5em;}
+        p { margin-top:0; margin-bottom: 15px; text-align: center; font-size: 0.9em; }
+        .container {
+            background-color: #fff; padding: 20px; border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1); display: flex;
+            flex-direction: column; align-items: center; width: 480px; 
+        }
+        .controls { 
+            margin-top: 15px; display: flex; flex-direction: column; 
+            gap: 10px; align-items: stretch; width: 100%; 
+        }
+        .control-group { 
+            display: grid; 
+            grid-template-columns: 140px 1fr 60px; 
+            align-items: center; 
+            gap: 10px;
+        }
+        label { font-weight: bold; flex-shrink: 0; text-align: left; font-size: 0.85em; }
+        input[type="range"] { width: 100%; margin: 0; }
+        .value-display { 
+            min-width: 50px; text-align: right;
+            font-family: monospace; font-size: 0.85em; padding-right: 5px; 
+        }
+        button { 
+            font-size: 1em; padding: 10px 20px; margin-top: 15px; 
+            border: none; border-radius: 4px; color: white; cursor: pointer;
+            transition: background-color 0.3s ease; width: 100%; box-sizing: border-box;
+        }
+        button:hover:not(:disabled) { opacity: 0.9; }
+        button:disabled { background-color: #bdc3c7; cursor: not-allowed; opacity: 0.7; }
+        #audioToggle { background-color: #2ecc71; }
+        #audioToggle:hover:not(:disabled) { background-color: #27ae60; }
+        #bowingToggle { background-color: #e67e22; }
+        #bowingToggle:hover:not(:disabled) { background-color: #d35400; }
+        hr.separator { width:100%; border:none; border-top: 1px solid #eee; margin: 8px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Modal String Synthesizer (MVP)</h1>
+        <p>Bowed String Synthesis with Modal Resonators</p>
+        <button id="audioToggle">Start Audio</button>
+
+        <div class="controls">
+            <div class="control-group">
+                <label for="frequency">Fundamental Freq (Hz):</label>
+                <input type="range" id="frequency" value="220" min="20" max="1000" step="1"
+                       data-dsp-min="20" data-dsp-max="1000" data-dsp-decimals="0">
+                <span id="frequencyValue" class="value-display">220</span>
+            </div>
+            <div class="control-group">
+                <label for="stringDamping">String Damping:</label>
+                <input type="range" id="stringDamping" value="0.5" min="0.01" max="0.99" step="0.01"
+                       data-dsp-min="0.01" data-dsp-max="0.99" data-dsp-decimals="2">
+                <span id="stringDampingValue" class="value-display">0.50</span>
+            </div>
+            <div class="control-group">
+                <label for="stringMaterial">String Material:</label>
+                <select id="stringMaterial" class="param-select">
+                    <option value="0">Steel</option>
+                    <option value="1">Gut</option>
+                    <option value="2">Nylon</option>
+                    <option value="3">Wound</option>
+                </select>
+                <span id="stringMaterialValue" class="value-display">Steel</span>
+            </div>
+        <hr class="separator">
+        <div class="control-group">
+            <label for="cutoffParam">LPF Cutoff (0-1):</label>
+            <input type="range" id="cutoffParam" value="0.50" min="0.00" max="1.00" step="0.01"
+                   data-dsp-min="0.00" data-dsp-max="1.00" data-dsp-decimals="2">
+            <span id="cutoffParamValue" class="value-display">0.50</span>
+        </div>
+        <div class="control-group">
+            <label for="resonanceParam">LPF Reso (0-1):</label>
+            <input type="range" id="resonanceParam" value="0.10" min="0.00" max="1.00" step="0.01"
+                   data-dsp-min="0.00" data-dsp-max="1.00" data-dsp-decimals="2">
+            <span id="resonanceParamValue" class="value-display">0.10</span>
+        </div>
+        <hr class="separator">
+        <div class="control-group">
+            <label for="bodyModeQ">Body Mode Q:</label>
+            <input type="range" id="bodyModeQ" value="1.0" min="0.25" max="12.0" step="0.05"
+                   data-dsp-min="0.25" data-dsp-max="12.0" data-dsp-decimals="2">
+            <span id="bodyModeQValue" class="value-display">1.00</span>
+        </div>
+        <div class="control-group">
+            <label for="bodyMode1FreqSelect">Mode 1 Freq:</label>
+            <select id="bodyMode1FreqSelect" class="param-select"></select>
+            <span id="bodyMode1FreqSelectValue" class="value-display">277.18</span>
+        </div>
+        <div class="control-group">
+            <label for="bodyMode2FreqSelect">Mode 2 Freq:</label>
+            <select id="bodyMode2FreqSelect" class="param-select"></select>
+            <span id="bodyMode2FreqSelectValue" class="value-display">466.16</span>
+        </div>
+        <div class="control-group">
+            <label for="bodyMode3FreqSelect">Mode 3 Freq:</label>
+            <select id="bodyMode3FreqSelect" class="param-select"></select>
+            <span id="bodyMode3FreqSelectValue" class="value-display">554.37</span>
+        </div>
+        <div class="control-group"> 
+            <label for="bpfBankMixLevelParam">Body Reso Mix:</label>
+            <input type="range" id="bpfBankMixLevelParam" value="0.25" min="0.00" max="1.00" step="0.01"
+                   data-dsp-min="0.00" data-dsp-max="1.00" data-dsp-decimals="2">
+            <span id="bpfBankMixLevelParamValue" class="value-display">0.25</span>
+        </div>
+        <hr class="separator">
+        <div class="control-group">
+            <label for="sawPulseMix">Saw/Pulse Mix:</label>
+            <input type="range" id="sawPulseMix" value="0.5" min="0.0" max="1.0" step="0.01"
+                   data-dsp-min="0.0" data-dsp-max="1.0" data-dsp-decimals="2">
+            <span id="sawPulseMixValue" class="value-display">0.50</span>
+        </div>
+        <div class="control-group">
+            <label for="bowPosition">Bow Position:</label>
+            <input type="range" id="bowPosition" value="0.1" min="0.01" max="0.5" step="0.01"
+                   data-dsp-min="0.01" data-dsp-max="0.5" data-dsp-decimals="2">
+            <span id="bowPositionValue" class="value-display">0.10</span>
+        </div>
+        <div class="control-group">
+            <label for="bowSpeed">Bow Speed:</label>
+            <input type="range" id="bowSpeed" value="0.5" min="0.0" max="1.0" step="0.01"
+                   data-dsp-min="0.0" data-dsp-max="1.0" data-dsp-decimals="2">
+            <span id="bowSpeedValue" class="value-display">0.50</span>
+        </div>
+        <div class="control-group">
+            <label for="toneNoiseMix">Tone/Noise Mix:</label>
+            <input type="range" id="toneNoiseMix" value="0.8" min="0.0" max="1.0" step="0.01"
+                   data-dsp-min="0.0" data-dsp-max="1.0" data-dsp-decimals="2">
+            <span id="toneNoiseMixValue" class="value-display">0.80</span>
+        </div>
+        <hr class="separator">
+        <div class="control-group">
+            <label for="vibratoRate">Vibrato Rate (Hz):</label>
+            <input type="range" id="vibratoRate" value="5.0" min="0.0" max="10.0" step="0.1"
+                   data-dsp-min="0.0" data-dsp-max="10.0" data-dsp-decimals="1">
+            <span id="vibratoRateValue" class="value-display">5.0</span>
+        </div>
+        <div class="control-group">
+            <label for="vibratoDepth">Vibrato Depth:</label>
+            <input type="range" id="vibratoDepth" value="0.0" min="0.0" max="1.0" step="0.01"
+                   data-dsp-min="0.0" data-dsp-max="1.0" data-dsp-decimals="2">
+            <span id="vibratoDepthValue" class="value-display">0.00</span>
+        </div>
+        <div class="control-group">
+            <label for="vibratoPitchAmount">Pitch/Amp Mix:</label>
+            <input type="range" id="vibratoPitchAmount" value="0.7" min="0.0" max="1.0" step="0.01"
+                   data-dsp-min="0.0" data-dsp-max="1.0" data-dsp-decimals="2">
+            <span id="vibratoPitchAmountValue" class="value-display">0.70</span>
+        </div>
+        <hr class="separator">
+        <div class="control-group">
+            <label for="bowForce">Bow Force:</label>
+            <input type="range" id="bowForce" value="0.8" min="0.0" max="1.0" step="0.01"
+                   data-dsp-min="0.0" data-dsp-max="1.0" data-dsp-decimals="2">
+            <span id="bowForceValue" class="value-display">0.80</span>
+        </div>
+        <button id="bowingToggle" disabled>Start Bowing</button>
+    </div>
+    </div>
+
+    <script src="main.js" type="module"></script>
+</body>
+</html>

@@ -3,9 +3,22 @@
 const RAMP_TIME = 0.02; // 20ms for parameter smoothing
 
 // --- Helper Functions ---
+function midiToFreq(midiNote) {
+    return 440 * Math.pow(2, (midiNote - 69) / 12.0);
+}
 
+function getNoteName(midiNote) {
+    const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    const octave = Math.floor(midiNote / 12) - 1;
+    return noteNames[midiNote % 12] + octave;
+}
 
-
+// --- Modal Configuration (for the 3-mode Body Resonator) ---
+const modalModeConfigs = [
+    { idPrefix: 'bodyMode1Freq', baseMidi: 61, midiRange: [-6, 5], defaultMidiOffset: 0, spanId: 'bodyMode1FreqSelectValue' }, // Base C#4
+    { idPrefix: 'bodyMode2Freq', baseMidi: 70, midiRange: [-6, 5], defaultMidiOffset: 0, spanId: 'bodyMode2FreqSelectValue' }, // Base A#4
+    { idPrefix: 'bodyMode3Freq', baseMidi: 73, midiRange: [-6, 5], defaultMidiOffset: 0, spanId: 'bodyMode3FreqSelectValue' }  // Base C#5
+];
 
 let audioContext;
 let workletNode;
@@ -21,16 +34,18 @@ const paramConfigs = {};
 // --- Define UI elements by ID ---
 const uiElementIds = [
     'frequency',        // Maps to fundamentalFrequency
-    'stringDamping',    // String damping parameter
-    'stringMaterial',   // String material type
+    'stringDamping',    // New modal string parameter
+    'cutoffParam',      // LPF Cutoff
+    'resonanceParam',   // LPF Resonance
+    'bodyModeQ',        // Body Q Scale
+    'bodyMode1FreqSelect', // Body Mode 1 Freq
+    'bodyMode2FreqSelect', // Body Mode 2 Freq
+    'bodyMode3FreqSelect', // Body Mode 3 Freq
+    'bpfBankMixLevelParam', // Body Mix Level
+    'sawPulseMix',      // Bow excitation saw/pulse mix
     'bowPosition',      // Bow position (distance from bridge)
-    'bowSpeed',         // Bow speed
-    'bowForce',         // Bow pressure/force
-    'brightness',       // Overall brightness control
-    'vibratoRate',      // Vibrato rate in Hz
-    'vibratoDepth',     // Vibrato depth 0-1
-    'bodyType',         // Instrument body type
-    'bodyResonance'     // Body resonance amount
+    'toneNoiseMix',     // Bow excitation tone/noise mix
+    'bowForce'          // Maps to excitationLevel
 ];
 
 const uiElements = {};
@@ -52,20 +67,71 @@ function getProcessorParamName(htmlId) {
     const mapping = {
         'frequency': 'fundamentalFrequency',
         'stringDamping': 'stringDamping',
-        'stringMaterial': 'stringMaterial',
-        'bowPosition': 'bowPosition',
-        'bowSpeed': 'bowSpeed',
-        'bowForce': 'bowForce',
-        'brightness': 'brightness',
-        'vibratoRate': 'vibratoRate',
-        'vibratoDepth': 'vibratoDepth',
-        'bodyType': 'bodyType',
-        'bodyResonance': 'bodyResonance'
+        'cutoffParam': 'lpfCutoff',      // Added LPF mapping
+        'resonanceParam': 'lpfQ',       // Added LPF mapping
+        'bodyModeQ': 'bodyModeQScale',  // Body mode Q scaling factor
+        'bpfBankMixLevelParam': 'bodyMixLevel',  // Body resonator mix
+        'sawPulseMix': 'sawPulseMix',   // Bow excitation parameters
+        'bowPosition': 'bowPosition',   // Bow position from bridge
+        'toneNoiseMix': 'toneNoiseMix',
+        'bowForce': 'excitationLevel'
     };
-    return mapping[htmlId] || htmlId;
+    return mapping[htmlId] || htmlId; // Fallback, though all current IDs should be in mapping
 }
 
+function populateModeFreqDropdowns() {
+    modalModeConfigs.forEach((modeConfig) => {
+        const selectId = modeConfig.idPrefix + 'Select'; // e.g., bodyMode1FreqSelect
+        const selectElement = uiElements[selectId]?.input;
+        const valueSpanElement = document.getElementById(modeConfig.spanId);
 
+        if (!selectElement) {
+            // console.warn(`Select element ${selectId} not found for populating.`);
+            return;
+        }
+        
+        selectElement.innerHTML = ''; // Clear existing options
+
+        const baseMidi = modeConfig.baseMidi;
+        const minOffset = modeConfig.midiRange[0];
+        const maxOffset = modeConfig.midiRange[1];
+        let defaultSelectedFrequency = null;
+
+        for (let offset = minOffset; offset <= maxOffset; offset++) {
+            const midiNote = baseMidi + offset;
+            const freq = midiToFreq(midiNote);
+            const noteName = getNoteName(midiNote);
+
+            const option = document.createElement('option');
+            option.value = freq.toFixed(4); // Store frequency with more precision
+            option.textContent = `${noteName} (${freq.toFixed(2)} Hz)`;
+            selectElement.appendChild(option);
+
+            if (offset === modeConfig.defaultMidiOffset) {
+                option.selected = true;
+                defaultSelectedFrequency = freq;
+            }
+        }
+
+        // After populating, set the select element's value and update paramConfigs
+        if (defaultSelectedFrequency !== null) {
+            selectElement.value = defaultSelectedFrequency.toFixed(4);
+        } else if (selectElement.options.length > 0) {
+            // Fallback if defaultMidiOffset didn't match or wasn't found: select the first option
+            selectElement.selectedIndex = 0;
+        }
+
+        // Update paramConfigs with the actual value from the select element
+        if (paramConfigs[selectId]) {
+            paramConfigs[selectId].currentValue = parseFloat(selectElement.value);
+            if (valueSpanElement) {
+                paramConfigs[selectId].spanElement = valueSpanElement;
+            }
+            // Ensure decimals for frequency display, defaulting to 2 if not set by data-dsp-decimals
+            paramConfigs[selectId].decimals = parseInt(selectElement.dataset.dspDecimals || '2', 10);
+        }
+    });
+}
 
 // --- Update all display values based on stored configs and current slider values ---
 function updateAllDisplayValues() {
@@ -86,16 +152,8 @@ function updateAllDisplayValues() {
             // }
             // Since isMapped is always false, displayVal remains config.currentValue.
 
-            // Special handling for dropdowns
-            if (key === 'stringMaterial') {
-                const materialNames = ['Steel', 'Gut', 'Nylon', 'Wound'];
-                const materialIndex = parseInt(config.currentValue || 0);
-                config.spanElement.textContent = materialNames[materialIndex] || 'Steel';
-            } else if (key === 'bodyType') {
-                const bodyNames = ['Violin', 'Viola', 'Cello', 'Guitar', 'None'];
-                const bodyIndex = parseInt(config.currentValue || 0);
-                config.spanElement.textContent = bodyNames[bodyIndex] || 'Violin';
-            } else if (typeof displayVal === 'number' && !isNaN(displayVal)) {
+            // Ensure displayVal is a number before calling toFixed
+            if (typeof displayVal === 'number' && !isNaN(displayVal)) {
                 config.spanElement.textContent = displayVal.toFixed(config.decimals);
             } else {
                 // If displayVal is not a valid number (e.g. NaN from a failed parse somewhere,
@@ -191,7 +249,8 @@ async function initializeAudio() {
         
         // Order is important:
         initializeParamConfigs();      // 1. Create paramConfigs for all UI elements.
-        updateAllDisplayValues();      // 2. Update all UI spans from the now-correct paramConfigs.
+        populateModeFreqDropdowns();   // 2. Populate select dropdowns, set their .value, and update paramConfigs[selectId].currentValue.
+        updateAllDisplayValues();      // 3. Update all UI spans from the now-correct paramConfigs.
 
         // console.log('[Main] Loading AudioWorklet module...');
         await audioContext.audioWorklet.addModule('basic-processor.js');
@@ -299,7 +358,6 @@ if (bowingToggleButton) {
         
         // Update button text
         bowingToggleButton.textContent = isBowingActive ? 'Stop Bowing' : 'Start Bowing';
-        bowingToggleButton.classList.toggle('active', isBowingActive);
         
         // Ensure current parameters are sent before changing bowing state
         updateParametersOnAudioThread(); 
@@ -313,23 +371,11 @@ if (bowingToggleButton) {
 
 allParamInputs.forEach(inputElement => {
     if (inputElement) {
-        // Handle both sliders and select dropdowns
-        const eventType = inputElement.tagName === 'SELECT' ? 'change' : 'input';
-        inputElement.addEventListener(eventType, () => {
+        // All current controls are sliders, so 'input' event is fine
+        inputElement.addEventListener('input', () => {
             const paramKey = inputElement.id; 
             if (paramKey && paramConfigs[paramKey]) {
                 paramConfigs[paramKey].currentValue = parseFloat(inputElement.value);
-                
-                // Special handling for dropdown displays
-                if (paramKey === 'stringMaterial' && paramConfigs[paramKey].spanElement) {
-                    const materialNames = ['Steel', 'Gut', 'Nylon', 'Wound'];
-                    const materialIndex = parseInt(inputElement.value);
-                    paramConfigs[paramKey].spanElement.textContent = materialNames[materialIndex] || 'Steel';
-                } else if (paramKey === 'bodyType' && paramConfigs[paramKey].spanElement) {
-                    const bodyNames = ['Violin', 'Viola', 'Cello', 'Guitar', 'None'];
-                    const bodyIndex = parseInt(inputElement.value);
-                    paramConfigs[paramKey].spanElement.textContent = bodyNames[bodyIndex] || 'Violin';
-                }
             }
             updateParametersOnAudioThread(); 
         });
@@ -338,8 +384,9 @@ allParamInputs.forEach(inputElement => {
 
 // --- Initial Page Setup ---
 // Order is important for correct initialization before audio starts or UI is enabled.
-initializeParamConfigs();      // 1. Create paramConfigs.
-updateAllDisplayValues();      // 2. Update all UI display spans using the finalized paramConfigs.
+initializeParamConfigs();      // 1. Create paramConfigs. currentValue for selects might be temporary.
+populateModeFreqDropdowns();   // 2. Populate select dropdowns, set their .value, and crucially update paramConfigs[selectId].currentValue and .spanElement.
+updateAllDisplayValues();      // 3. Update all UI display spans using the finalized paramConfigs.
 
 if (bowingToggleButton) bowingToggleButton.disabled = true;
 allParamInputs.forEach(input => { if(input) input.disabled = true; });

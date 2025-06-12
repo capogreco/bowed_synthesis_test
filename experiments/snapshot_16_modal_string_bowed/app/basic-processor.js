@@ -7,19 +7,21 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
     return [
       { name: 'fundamentalFrequency', defaultValue: 220, minValue: 20.0, maxValue: 2000.0, automationRate: 'a-rate' },
       { name: 'stringDamping', defaultValue: 0.5, minValue: 0.01, maxValue: 0.99, automationRate: 'k-rate' },
-      { name: 'bowForce', defaultValue: 0.5, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' },
-      { name: 'bowPosition', defaultValue: 0.12, minValue: 0.02, maxValue: 0.5, automationRate: 'k-rate' }, // 0.02 = very close to bridge, 0.5 = middle of string
-      { name: 'bowSpeed', defaultValue: 0.5, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' }, // 0 = very slow, 1 = very fast
-      { name: 'brightness', defaultValue: 0.5, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' }, // Overall brightness control
-      { name: 'stringMaterial', defaultValue: 0, minValue: 0, maxValue: 3, automationRate: 'k-rate' }, // 0=steel, 1=gut, 2=nylon, 3=wound
+      { name: 'excitationLevel', defaultValue: 0.8, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' },
+      { name: 'lpfCutoff', defaultValue: 0.5, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' },
+      { name: 'lpfQ', defaultValue: 0.1, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' },
       
-      // --- Vibrato parameters ---
-      { name: 'vibratoRate', defaultValue: 5.0, minValue: 0.0, maxValue: 10.0, automationRate: 'k-rate' }, // Hz
-      { name: 'vibratoDepth', defaultValue: 0.0, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' }, // 0-1
+      // --- Bow excitation parameters ---
+      { name: 'sawPulseMix', defaultValue: 0.5, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' },
+      { name: 'pulseWidth', defaultValue: 0.5, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' },
+      { name: 'toneNoiseMix', defaultValue: 0.8, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' },
       
-      // --- Instrument Body ---
-      { name: 'bodyType', defaultValue: 0, minValue: 0, maxValue: 4, automationRate: 'k-rate' }, // 0=violin, 1=viola, 2=cello, 3=guitar, 4=none
-      { name: 'bodyResonance', defaultValue: 0.3, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' },
+      // --- Parameters for Modal Body ---
+      { name: 'bodyModeQScale', defaultValue: 1.0, minValue: 0.25, maxValue: 12.0, automationRate: 'k-rate' },
+      { name: 'bodyMode1Freq', defaultValue: 277.18, minValue: 20.0, maxValue: 20000.0, automationRate: 'k-rate' },
+      { name: 'bodyMode2Freq', defaultValue: 466.16, minValue: 20.0, maxValue: 20000.0, automationRate: 'k-rate' },
+      { name: 'bodyMode3Freq', defaultValue: 554.37, minValue: 20.0, maxValue: 20000.0, automationRate: 'k-rate' },
+      { name: 'bodyMixLevel', defaultValue: 0.25, minValue: 0.0, maxValue: 1.0, automationRate: 'k-rate' },
     ];
   }
 
@@ -31,10 +33,13 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
     const descriptors = ContinuousExcitationProcessor.parameterDescriptors;
     this._cachedFundamentalFrequency = descriptors.find(p => p.name === 'fundamentalFrequency').defaultValue;
     this._cachedStringDamping = descriptors.find(p => p.name === 'stringDamping').defaultValue;
-    this._cachedBrightness = descriptors.find(p => p.name === 'brightness').defaultValue;
-    this._cachedBowPosition = descriptors.find(p => p.name === 'bowPosition').defaultValue;
-    this._cachedStringMaterial = descriptors.find(p => p.name === 'stringMaterial').defaultValue;
-    this._cachedBodyType = descriptors.find(p => p.name === 'bodyType').defaultValue;
+    this._cachedLpfCutoff = descriptors.find(p => p.name === 'lpfCutoff').defaultValue;
+    this._cachedLpfQ = descriptors.find(p => p.name === 'lpfQ').defaultValue;
+    this._cachedBodyModeQScale = descriptors.find(p => p.name === 'bodyModeQScale').defaultValue;
+    this._cachedBodyMode1Freq = descriptors.find(p => p.name === 'bodyMode1Freq').defaultValue;
+    this._cachedBodyMode2Freq = descriptors.find(p => p.name === 'bodyMode2Freq').defaultValue;
+    this._cachedBodyMode3Freq = descriptors.find(p => p.name === 'bodyMode3Freq').defaultValue;
+    // bodyMixLevel is read directly in process(), not cached for coefficient calculation.
 
     // --- String Modal Resonator Parameters & State Arrays (Biquad-based) ---
     this.stringMode_b0 = new Float32Array(NUM_STRING_MODES);
@@ -54,55 +59,16 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
     this.sawPhase = 0.0;
     this.pulsePhase = 0.0;
     
-    // Bow position affects which harmonics are suppressed
-    this.harmonicGains = new Float32Array(NUM_STRING_MODES);
-    
-    // Dynamic bow pressure tracking
-    this._lastDynamicCutoff = 0.5;
-    
-    // Attack/Release envelope
-    this.bowEnvelope = 0.0;
-    this.bowEnvelopeTarget = 0.0;
-    this.bowEnvelopeRate = 0.005; // ~20ms at 48kHz
-    
-    // Vibrato state
-    this.vibratoPhase = 0.0;
-    
     // --- LPF State ---
     this.lpf_b0 = 1; this.lpf_b1 = 0; this.lpf_b2 = 0; 
     this.lpf_a1 = 0; this.lpf_a2 = 0;
     this.lpf_z1 = 0; this.lpf_z2 = 0;
 
     // --- Modal Body Resonator Base Parameters & State Arrays ---
-    // Body presets: [violin, viola, cello, guitar, none]
-    this.bodyPresets = [
-      { // Violin
-        freqs: [280, 460, 580, 700, 840],
-        qs: [12, 15, 10, 8, 8],
-        gains: [1.0, 0.8, 0.7, 0.5, 0.3]
-      },
-      { // Viola  
-        freqs: [220, 380, 500, 650, 780],
-        qs: [10, 12, 9, 7, 7],
-        gains: [1.0, 0.85, 0.7, 0.5, 0.3]
-      },
-      { // Cello
-        freqs: [100, 200, 300, 400, 500],
-        qs: [8, 10, 8, 6, 6],
-        gains: [1.0, 0.9, 0.8, 0.6, 0.4]
-      },
-      { // Guitar
-        freqs: [100, 200, 400, 500, 600],
-        qs: [15, 12, 10, 8, 8],
-        gains: [1.0, 0.7, 0.8, 0.5, 0.4]
-      },
-      { // None
-        freqs: [100, 200, 300, 400, 500],
-        qs: [1, 1, 1, 1, 1],
-        gains: [0, 0, 0, 0, 0]
-      }
-    ];
-    this.numBodyModes = 5;
+    this.bodyModeBaseFreqs = [277.18, 466.16, 554.37]; // Hz (C#4, A#4, C#5) - Default values
+    this.bodyModeBaseQs    = [10,  15,  12];  // Base Q values for each mode
+    this.bodyModeGains     = [0.8, 1.0, 0.9]; // Relative gains (currently fixed, could be AudioParams)
+    this.numBodyModes      = this.bodyModeBaseFreqs.length;
 
     this.bodyMode_b0 = new Float32Array(this.numBodyModes);
     this.bodyMode_b1 = new Float32Array(this.numBodyModes);
@@ -130,7 +96,6 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
 
     if (data.type === 'setBowing') {
       this.isBowing = data.value;
-      this.bowEnvelopeTarget = data.value ? 1.0 : 0.0;
       if (this.isBowing) {
         // When starting to bow, optionally reset states for cleaner attack
         this._resetStringModeStates();
@@ -163,52 +128,22 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
   _calculateStringModeCoefficients() {
     const Fs = this.sampleRate;
     const fundamental = this._cachedFundamentalFrequency;
-    const bowPos = this._cachedBowPosition || 0.1; // Default if not yet set
-
-    // Get material properties
-    const material = Math.round(this._cachedStringMaterial || 0);
-    let inharmonicity, dampingFactor, brightnessScale;
-    
-    switch(material) {
-      case 0: // Steel - bright, low damping, moderate inharmonicity
-        inharmonicity = 0.0003;
-        dampingFactor = 0.8;
-        brightnessScale = 1.0;
-        break;
-      case 1: // Gut - warm, higher damping, very low inharmonicity
-        inharmonicity = 0.00005;
-        dampingFactor = 1.5;
-        brightnessScale = 0.7;
-        break;
-      case 2: // Nylon - mellow, high damping, low inharmonicity
-        inharmonicity = 0.0001;
-        dampingFactor = 2.0;
-        brightnessScale = 0.5;
-        break;
-      case 3: // Wound - complex, moderate damping, higher inharmonicity
-        inharmonicity = 0.0005;
-        dampingFactor = 1.2;
-        brightnessScale = 0.85;
-        break;
-      default:
-        inharmonicity = 0.0003;
-        dampingFactor = 1.0;
-        brightnessScale = 1.0;
-    }
+    // const dampingControl = this._cachedStringDamping; // Not used in this diagnostic version
 
     // Calculate modes with proper harmonic series and damping
     for (let i = 0; i < NUM_STRING_MODES; i++) {
-      // Harmonic series with material-specific inharmonicity
+      // Harmonic series with slight inharmonicity
+      const inharmonicity = 0.0003; // Typical for steel strings
       const modeNumber = i + 1;
       const modeFreq = fundamental * modeNumber * Math.sqrt(1 + inharmonicity * modeNumber * modeNumber);
       
       if (modeFreq > 0 && modeFreq < Fs / 2) {
         // Q decreases with mode number (higher modes decay faster)
-        const baseQ = 200 / dampingFactor;
+        const baseQ = 200;
         const modeQ = baseQ / Math.sqrt(modeNumber) * (1 - this._cachedStringDamping * 0.8);
         
-        // Mode amplitude decreases with mode number, affected by material brightness
-        const modeAmplitude = (brightnessScale * Math.pow(0.95, modeNumber - 1)) / modeNumber;
+        // Mode amplitude decreases with mode number
+        const modeAmplitude = 1.0 / modeNumber;
         
         const omega = 2 * Math.PI * modeFreq / Fs;
         const s_omega = Math.sin(omega);
@@ -224,11 +159,6 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
         
         this.modeAmplitudes[i] = modeAmplitude;
         this.modeFrequencies[i] = modeFreq;
-        
-        // Calculate harmonic gain based on bow position
-        // Harmonics at integer multiples of 1/bowPos are suppressed
-        const harmonicAtNode = Math.abs(Math.sin(Math.PI * modeNumber * bowPos));
-        this.harmonicGains[i] = harmonicAtNode;
       } else {
         // Mode is out of range, silence it
         this.stringMode_b0[i] = 0;
@@ -238,22 +168,26 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
         this.stringMode_a2[i] = 0;
         this.modeAmplitudes[i] = 0;
         this.modeFrequencies[i] = 0;
-        this.harmonicGains[i] = 0;
       }
     }
   }
 
-  _calculateLpfCoefficients(dynamicBrightness = null) {
+  _calculateLpfCoefficients() {
     const Fs = this.sampleRate;
-    const brightness = dynamicBrightness !== null ? dynamicBrightness : this._cachedBrightness;
+    const sliderCutoff = this._cachedLpfCutoff;
+    const sliderReso = this._cachedLpfQ;
 
-    // Map brightness to frequency range
-    const minF = 200, maxF = Math.min(12000, Fs * 0.45);
-    let actualCutoffFreq = minF * Math.pow(maxF / minF, brightness);
+    // Map slider to frequency range
+    const minF = 40, maxF = Math.min(18000, Fs * 0.45);
+    let actualCutoffFreq = minF * Math.pow(maxF / minF, sliderCutoff);
     actualCutoffFreq = Math.max(minF, Math.min(maxF, actualCutoffFreq));
     
-    // Fixed reasonable Q
-    const actualQ_lpf = 0.8;
+    // Map resonance slider to Q
+    const mappedResonanceParam = Math.pow(Math.max(0.0, Math.min(1.0, sliderReso)), 3);
+    const minQLPF = 0.707, maxQLPF = 2.5;
+    let actualQ_lpf = minQLPF * Math.pow(maxQLPF / minQLPF, mappedResonanceParam);
+    if (mappedResonanceParam <= 0) actualQ_lpf = minQLPF;
+    actualQ_lpf = Math.max(minQLPF, Math.min(actualQ_lpf, maxQLPF * 1.01));
 
     // Calculate LPF coefficients
     const omega_lpf = 2 * Math.PI * actualCutoffFreq / Fs;
@@ -277,15 +211,21 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
 
   _calculateModalBodyCoefficients() {
     const Fs = this.sampleRate;
-    const bodyType = Math.round(this._cachedBodyType || 0);
-    const preset = this.bodyPresets[bodyType];
+    const currentQScale = this._cachedBodyModeQScale;
+    const currentModeFreqs = [
+        this._cachedBodyMode1Freq, 
+        this._cachedBodyMode2Freq, 
+        this._cachedBodyMode3Freq
+    ];
 
     for (let i = 0; i < this.numBodyModes; i++) {
-        const F0_param = preset.freqs[i]; 
-        const Q_param = preset.qs[i]; 
-        const Gain_param = preset.gains[i]; 
+        const F0_param = currentModeFreqs[i]; 
+        const baseQ  = this.bodyModeBaseQs[i]; 
+        const Gain_param = this.bodyModeGains[i]; 
+        const Q_param  = Math.max(0.1, baseQ * currentQScale); 
 
-        if (F0_param <= 0 || F0_param >= Fs / 2 || Q_param <= 0 || Gain_param === 0) {
+        if (F0_param <= 0 || F0_param >= Fs / 2 || Q_param <= 0) {
+            // console.warn(`[CalcModalBodyCoeffs] Invalid params for Mode ${i}: F0=${F0_param}, Q=${Q_param}. Setting to bypass.`);
             this.bodyMode_b0[i] = 1; this.bodyMode_b1[i] = 0; this.bodyMode_b2[i] = 0;
             this.bodyMode_a1[i] = 0; this.bodyMode_a2[i] = 0;
             continue;
@@ -296,7 +236,7 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
         const c_omega = Math.cos(omega);
         const alpha = s_omega / (2 * Q_param);
 
-        // BPF coefficients
+        // BPF coefficients (normalized for peak gain = 1 before applying Gain_param)
         const b0_norm = alpha;
         const b1_norm = 0;
         const b2_norm = -alpha;
@@ -305,7 +245,7 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
         const a2_norm = 1 - alpha;
         
         this.bodyMode_b0[i] = (Gain_param * b0_norm) / a0_norm;
-        this.bodyMode_b1[i] = (Gain_param * b1_norm) / a0_norm;
+        this.bodyMode_b1[i] = (Gain_param * b1_norm) / a0_norm; // Remains 0
         this.bodyMode_b2[i] = (Gain_param * b2_norm) / a0_norm;
         this.bodyMode_a1[i] = a1_norm / a0_norm;
         this.bodyMode_a2[i] = a2_norm / a0_norm;
@@ -317,20 +257,6 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
    let needsRecalcLpf = false;
     let needsRecalcBody = false; // Flag for body resonator
     const tolerance = 1e-6;
-
-    // Check stringMaterial
-    const stringMaterialVal = parameters.stringMaterial[0];
-    if (Math.abs(stringMaterialVal - this._cachedStringMaterial) > tolerance) {
-      this._cachedStringMaterial = stringMaterialVal;
-      needsRecalcStringModes = true;
-    }
-
-    // Check bowPosition
-    const bowPositionVal = parameters.bowPosition[0];
-    if (Math.abs(bowPositionVal - this._cachedBowPosition) > tolerance) {
-      this._cachedBowPosition = bowPositionVal;
-      needsRecalcStringModes = true; // Bow position affects harmonic gains
-    }
 
     // Check fundamentalFrequency
     const fundamentalFreqVal = parameters.fundamentalFrequency[0];
@@ -346,10 +272,15 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
       needsRecalcStringModes = true;
     }
 
-    // Check brightness
-    const brightnessVal = parameters.brightness[0];
-    if (Math.abs(brightnessVal - this._cachedBrightness) > tolerance) {
-      this._cachedBrightness = brightnessVal;
+    // Check LPF parameters
+    const lpfCutoffVal = parameters.lpfCutoff[0];
+    if (Math.abs(lpfCutoffVal - this._cachedLpfCutoff) > tolerance) {
+      this._cachedLpfCutoff = lpfCutoffVal;
+      needsRecalcLpf = true;
+    }
+    const lpfQVal = parameters.lpfQ[0];
+    if (Math.abs(lpfQVal - this._cachedLpfQ) > tolerance) {
+      this._cachedLpfQ = lpfQVal;
       needsRecalcLpf = true;
     }
 
@@ -360,10 +291,25 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
       this._calculateLpfCoefficients();
     }
 
-    // Check Body Type
-    const bodyTypeVal = parameters.bodyType[0];
-    if (Math.abs(bodyTypeVal - this._cachedBodyType) > tolerance) {
-        this._cachedBodyType = bodyTypeVal;
+    // Check Body Model parameters
+    const bodyModeQScaleVal = parameters.bodyModeQScale[0];
+    if (Math.abs(bodyModeQScaleVal - this._cachedBodyModeQScale) > tolerance) {
+        this._cachedBodyModeQScale = bodyModeQScaleVal;
+        needsRecalcBody = true;
+    }
+    const bodyMode1FreqVal = parameters.bodyMode1Freq[0];
+    if (Math.abs(bodyMode1FreqVal - this._cachedBodyMode1Freq) > tolerance) {
+        this._cachedBodyMode1Freq = bodyMode1FreqVal;
+        needsRecalcBody = true;
+    }
+    const bodyMode2FreqVal = parameters.bodyMode2Freq[0];
+    if (Math.abs(bodyMode2FreqVal - this._cachedBodyMode2Freq) > tolerance) {
+        this._cachedBodyMode2Freq = bodyMode2FreqVal;
+        needsRecalcBody = true;
+    }
+    const bodyMode3FreqVal = parameters.bodyMode3Freq[0];
+    if (Math.abs(bodyMode3FreqVal - this._cachedBodyMode3Freq) > tolerance) {
+        this._cachedBodyMode3Freq = bodyMode3FreqVal;
         needsRecalcBody = true;
     }
 
@@ -377,89 +323,46 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
     this._recalculateAllCoefficientsIfNeeded(parameters);
 
     const outputChannel = outputs[0][0];
-    const bowForce = parameters.bowForce[0];
-    const currentBodyMix = parameters.bodyResonance[0]; // k-rate
-    const brightness = parameters.brightness[0];
+    const excitationLevel = parameters.excitationLevel[0];
+    const dt = 1.0 / this.sampleRate; // dt is not used by biquads, but kept if needed elsewhere
+    const currentBodyMix = parameters.bodyMixLevel[0]; // k-rate
 
-    // Get bow parameters
-    const bowPosition = parameters.bowPosition[0];
-    const bowSpeed = parameters.bowSpeed[0];
-    
-    // Vibrato parameters
-    const vibratoRate = parameters.vibratoRate[0];
-    const vibratoDepth = parameters.vibratoDepth[0];
-    
-    // Update vibrato phase
-    const vibratoIncrement = vibratoRate / this.sampleRate;
-    
-    // Dynamic bow physics
-    // Bow force affects brightness and noise
-    const forceBrightness = 0.2 + (bowForce * 0.6); // Dynamic brightness from force
-    const forceNoise = Math.pow(bowForce, 1.5) * 0.4; // More force = more noise
-    
-    // Bow speed affects harmonic content and smoothness
-    const speedHarmonics = Math.pow(bowSpeed, 0.7); 
-    const speedSmoothness = bowSpeed * 0.5; // Faster = smoother
-    
-    // Calculate tone/noise mix from physical parameters
-    const toneNoiseMix = Math.max(0.3, Math.min(0.95, 0.8 - forceNoise + speedSmoothness));
+    // Get bow excitation parameters
+    const sawPulseMix = parameters.sawPulseMix[0];
+    const pulseWidth = parameters.pulseWidth[0];
+    const toneNoiseMix = parameters.toneNoiseMix[0];
     
     for (let i = 0; i < outputChannel.length; i++) {
-      // Update bow envelope
-      if (this.bowEnvelope < this.bowEnvelopeTarget) {
-        this.bowEnvelope = Math.min(this.bowEnvelopeTarget, this.bowEnvelope + this.bowEnvelopeRate);
-      } else if (this.bowEnvelope > this.bowEnvelopeTarget) {
-        this.bowEnvelope = Math.max(this.bowEnvelopeTarget, this.bowEnvelope - this.bowEnvelopeRate);
-      }
-      
-      // Update vibrato
-      this.vibratoPhase += vibratoIncrement;
-      if (this.vibratoPhase >= 1.0) this.vibratoPhase -= 1.0;
-      const vibratoValue = Math.sin(2 * Math.PI * this.vibratoPhase);
-      
-      // Calculate vibrato modulations (70% pitch, 30% amplitude for realism)
-      const pitchModulation = 1.0 + (vibratoValue * vibratoDepth * 0.06); // ±6% pitch
-      const ampModulation = 1.0 + (vibratoValue * vibratoDepth * 0.2); // ±20% amplitude
-      
       // Generate continuous bow excitation when bowing
       let excitationSignal = 0.0;
       
-      if (this.bowEnvelope > 0.001) {
+      if (this.isBowing) {
         const fundamental = parameters.fundamentalFrequency.length > 1 
           ? parameters.fundamentalFrequency[i] 
           : parameters.fundamentalFrequency[0];
         
-        // Apply pitch vibrato to fundamental
-        const vibratoFundamental = fundamental * pitchModulation;
-        
         // Sawtooth wave
-        const sawIncrement = vibratoFundamental / this.sampleRate;
+        const sawIncrement = fundamental / this.sampleRate;
         this.sawPhase += sawIncrement;
         if (this.sawPhase >= 1.0) this.sawPhase -= 1.0;
         const sawWave = 2.0 * this.sawPhase - 1.0;
         
-        // Create richer harmonic content based on bow speed
-        let complexTone = sawWave;
-        if (speedHarmonics > 0.2) {
-          const harm2Phase = (this.sawPhase * 2.0) % 1.0;
-          const harm3Phase = (this.sawPhase * 3.0) % 1.0;
-          const harm2 = (2.0 * harm2Phase - 1.0) * 0.25 * speedHarmonics;
-          const harm3 = (2.0 * harm3Phase - 1.0) * 0.1 * speedHarmonics;
-          complexTone += harm2 + harm3;
-        }
+        // Pulse wave
+        this.pulsePhase += sawIncrement;
+        if (this.pulsePhase >= 1.0) this.pulsePhase -= 1.0;
+        const pulseWave = this.pulsePhase < pulseWidth ? 1.0 : -1.0;
         
-        // Bow stick-slip friction simulation
-        const friction = (Math.random() - 0.5) * 0.3;
-        const toneSignal = complexTone * 0.85 + friction * 0.15;
+        // Mix saw and pulse
+        const toneSignal = sawWave * sawPulseMix + (-pulseWave) * (1.0 - sawPulseMix);
         
         // Add noise
         const noiseSignal = Math.random() * 2.0 - 1.0;
         
-        // Mix tone and noise based on physical parameters
+        // Mix tone and noise
         const mixedExcitation = toneSignal * toneNoiseMix + noiseSignal * (1.0 - toneNoiseMix);
         
-        // Apply bow force with envelope and amplitude vibrato
-        excitationSignal = mixedExcitation * bowForce * this.bowEnvelope * ampModulation;
+        // Apply excitation level
+        excitationSignal = mixedExcitation * excitationLevel;
       }
       
       // Apply excitation to all string modes
@@ -473,24 +376,12 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
         const y_n_mode = this.stringMode_b0[mode] * currentInputToFilters + this.stringMode_z1_states[mode];
         this.stringMode_z1_states[mode] = (this.stringMode_b1[mode] * currentInputToFilters) - (this.stringMode_a1[mode] * y_n_mode) + this.stringMode_z2_states[mode];
         this.stringMode_z2_states[mode] = (this.stringMode_b2[mode] * currentInputToFilters) - (this.stringMode_a2[mode] * y_n_mode);
-        
-        // Apply harmonic gain based on bow position
-        y_n_string_modes_summed += y_n_mode * this.harmonicGains[mode];
+        y_n_string_modes_summed += y_n_mode;
       }
       
       // Scale the summed string mode output
       const stringOutput = y_n_string_modes_summed * this.outputScalingFactor;
 
-      // Apply dynamic brightness based on bow parameters
-      if (this.bowEnvelope > 0.001 && i === 0) {
-        const dynamicBrightness = Math.min(1.0, brightness * (1.0 + forceBrightness * 0.3));
-        
-        if (Math.abs(dynamicBrightness - this._lastDynamicCutoff) > 0.01) {
-          this._lastDynamicCutoff = dynamicBrightness;
-          this._calculateLpfCoefficients(dynamicBrightness);
-        }
-      }
-      
       // Apply LPF
       const y_n_lpf = this.lpf_b0 * stringOutput + this.lpf_z1;
       this.lpf_z1 = (this.lpf_b1 * stringOutput) - (this.lpf_a1 * y_n_lpf) + this.lpf_z2;
@@ -507,11 +398,8 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
           y_n_body_modes_summed += y_n_mode_ch;
       }
 
-      // Mix LPF output (pre-body) with Body Resonator output ---
-      const mixedOutput = (y_n_lpf * (1.0 - currentBodyMix)) + (y_n_body_modes_summed * currentBodyMix);
-      
-      // Apply amplitude vibrato to final output as well (subtle)
-      const finalOutput = mixedOutput * (1.0 + (ampModulation - 1.0) * 0.3);
+      // --- Mix LPF output (pre-body) with Body Resonator output ---
+      const finalOutput = (y_n_lpf * (1.0 - currentBodyMix)) + (y_n_body_modes_summed * currentBodyMix);
       
       outputChannel[i] = finalOutput;
     }
