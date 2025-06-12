@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Violin Body Filterbank</title>
+    <title>Refactored Parameter Management</title>
     <style>
         body { 
             font-family: sans-serif; display: flex; flex-direction: column; 
@@ -48,63 +48,67 @@
 </head>
 <body>
     <div class="container">
-        <h1>Violin Body Filterbank</h1>
+        <h1>Refactored Parameter Management</h1>
         <p>LPF + 4 BPFs (Open String Freqs)</p>
         <button id="audioToggle">Start Audio</button>
 
         <div class="controls">
             <div class="control-group">
                 <label for="frequency">String Freq (Hz):</label>
-                <input type="range" id="frequency" value="220" min="20" max="1000" step="1">
+                <input type="range" id="frequency" value="220" min="20" max="1000" step="1"
+                       data-dsp-min="20" data-dsp-max="1000" data-dsp-decimals="0">
                 <span id="frequencyValue" class="value-display">220</span>
             </div>
             <div class="control-group">
                 <label for="loopGain">Loop Gain:</label>
-                <input type="range" id="loopGain" value="0.995" min="0.800" max="1.050" step="0.001">
+                <input type="range" id="loopGain" value="0.995" min="0.800" max="1.050" step="0.001"
+                       data-dsp-min="0.800" data-dsp-max="1.050" data-dsp-decimals="3">
                 <span id="loopGainValue" class="value-display">0.995</span>
             </div>
             <hr class="separator">
             <div class="control-group">
-                <label for="cutoffParam">LPF Cutoff:</label>
-                <input type="range" id="cutoffParam" value="0.50" min="0.00" max="1.00" step="0.01">
+                <label for="cutoffParam">LPF Cutoff (0-1):</label>
+                <input type="range" id="cutoffParam" value="0.50" min="0.00" max="1.00" step="0.01"
+                       data-dsp-min="0.00" data-dsp-max="1.00" data-dsp-decimals="2">
                 <span id="cutoffParamValue" class="value-display">0.50</span>
             </div>
             <div class="control-group">
-                <label for="resonanceParam">LPF Reso:</label>
-                <input type="range" id="resonanceParam" value="0.10" min="0.00" max="1.00" step="0.01">
+                <label for="resonanceParam">LPF Reso (0-1):</label>
+                <input type="range" id="resonanceParam" value="0.10" min="0.00" max="1.00" step="0.01"
+                       data-dsp-min="0.00" data-dsp-max="1.00" data-dsp-decimals="2">
                 <span id="resonanceParamValue" class="value-display">0.10</span>
             </div>
             <hr class="separator">
             <div class="control-group"> 
-                <label for="bpfQParam">Body Resos Q (0.7-7.0):</label> <!-- Corrected Label -->
-                <input type="range" id="bpfQParam" value="0.1" min="0.00" max="1.00" step="0.01"> 
-                <span id="bpfQParamValue" class="value-display">1.336</span> <!-- Corrected Initial display: 0.707 + 0.1 * (7.0 - 0.707) -->
-            </div>
-            <div class="control-group"> 
                 <label for="bpfBankMixLevelParam">Body Reso Mix:</label>
-                <input type="range" id="bpfBankMixLevelParam" value="0.25" min="0.00" max="1.00" step="0.01">
+                <input type="range" id="bpfBankMixLevelParam" value="0.25" min="0.00" max="1.00" step="0.01"
+                       data-dsp-min="0.00" data-dsp-max="1.00" data-dsp-decimals="2">
                 <span id="bpfBankMixLevelParamValue" class="value-display">0.25</span>
             </div>
             <hr class="separator">
             <div class="control-group"> 
                 <label for="sawPulseMixParam">Pulse/Saw Mix:</label> 
-                <input type="range" id="sawPulseMixParam" value="0.50" min="0.00" max="1.00" step="0.01">
+                <input type="range" id="sawPulseMixParam" value="0.50" min="0.00" max="1.00" step="0.01"
+                       data-dsp-min="0.00" data-dsp-max="1.00" data-dsp-decimals="2">
                 <span id="sawPulseMixParamValue" class="value-display">0.50</span>
             </div>
             <div class="control-group"> 
                 <label for="pulseWidthParam">Pulse Width:</label>
-                <input type="range" id="pulseWidthParam" value="0.50" min="0.01" max="0.99" step="0.01">
+                <input type="range" id="pulseWidthParam" value="0.50" min="0.01" max="0.99" step="0.01"
+                       data-dsp-min="0.01" data-dsp-max="0.99" data-dsp-decimals="2">
                 <span id="pulseWidthParamValue" class="value-display">0.50</span>
             </div>
             <div class="control-group"> 
                 <label for="toneNoiseMixParam">Noise/Tone Mix:</label>
-                <input type="range" id="toneNoiseMixParam" value="0.50" min="0.00" max="1.00" step="0.01">
+                <input type="range" id="toneNoiseMixParam" value="0.50" min="0.00" max="1.00" step="0.01"
+                       data-dsp-min="0.00" data-dsp-max="1.00" data-dsp-decimals="2">
                 <span id="toneNoiseMixParamValue" class="value-display">0.50</span>
             </div>
             <hr class="separator">
             <div class="control-group">
                 <label for="bowForce">Excite Intensity:</label>
-                <input type="range" id="bowForce" value="0.020" min="0.000" max="0.100" step="0.001">
+                <input type="range" id="bowForce" value="0.020" min="0.000" max="0.100" step="0.001"
+                       data-dsp-min="0.000" data-dsp-max="0.100" data-dsp-decimals="3">
                 <span id="bowForceValue" class="value-display">0.020</span>
             </div>
             <button id="bowingToggle" disabled>Start Bowing</button>

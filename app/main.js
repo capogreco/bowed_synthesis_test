@@ -14,7 +14,7 @@ const paramConfigs = {};
 // This approach is more robust if an element is missing, initialization won't break all.
 const uiElementIds = [
     'frequency', 'loopGain', 'cutoffParam', 'resonanceParam',
-    'bpfQParam', 'bpfBankMixLevelParam',
+    'bpfBankMixLevelParam',
     'sawPulseMixParam', 'pulseWidthParam', 'toneNoiseMixParam', 'bowForce'
 ];
 

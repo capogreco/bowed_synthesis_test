@@ -10,8 +10,8 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
         loopGain: 0.995,
         lpfCutoff: 0.5,    // This is a 0-1 value used for internal log mapping
         lpfQ: 0.1,         // This is a 0-1 value used for internal power mapping
-        bpfQ: 0.1,           // This is a 0-1 value that will be mapped to actual Q 0.707-7.0
-        bpfBankMix: 0.25,  // Direct 0-1 value
+        // bpfQ: 0.1,        // Old: This was a 0-1 value that mapped to actual Q 0.707-7.0 for BPF bank
+        bpfBankMix: 0.25,  // Mix level for the body resonance (formerly BPF bank, now modal body)
         sawPulseMix: 0.5,    // Direct 0-1 value
         pulseWidth: 0.5,     // Direct 0.01-0.99 value (slider is 0.01-0.99)
         toneNoiseMix: 0.5,   // Direct 0-1 value
@@ -35,14 +35,22 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
         }
         this._updateDspValuesFromRaw(opts);
     }
-    
-    this.violinOpenStringFreqs = [196.00, 293.66, 440.00, 659.25];
-    this.numBpfChannels = this.violinOpenStringFreqs.length;
-    this.bp_b0 = new Float32Array(this.numBpfChannels); this.bp_b1 = new Float32Array(this.numBpfChannels);
-    this.bp_b2 = new Float32Array(this.numBpfChannels); this.bp_a1 = new Float32Array(this.numBpfChannels);
-    this.bp_a2 = new Float32Array(this.numBpfChannels);
-    this.bp_z1_state = new Float32Array(this.numBpfChannels); this.bp_z2_state = new Float32Array(this.numBpfChannels);
 
+    // --- Modal Body Resonator Parameters ---
+    this.bodyModeFreqs = [280, 460, 550]; // Hz
+    this.bodyModeQs    = [10,  15,  12];  // Q values
+    this.bodyModeGains = [0.8, 1.0, 0.9]; // Relative gains
+    this.numBodyModes  = this.bodyModeFreqs.length;
+
+    this.bodyMode_b0 = new Float32Array(this.numBodyModes);
+    this.bodyMode_b1 = new Float32Array(this.numBodyModes);
+    this.bodyMode_b2 = new Float32Array(this.numBodyModes);
+    this.bodyMode_a1 = new Float32Array(this.numBodyModes);
+    this.bodyMode_a2 = new Float32Array(this.numBodyModes);
+    this.bodyMode_z1_states = new Float32Array(this.numBodyModes);
+    this.bodyMode_z2_states = new Float32Array(this.numBodyModes);
+    
+    // --- LPF Parameters & State ---
     this.lpf_b0 = 1; this.lpf_b1 = 0; this.lpf_b2 = 0; this.lpf_a1 = 0; this.lpf_a2 = 0;             
     this.lpf_z1 = 0; this.lpf_z2 = 0; 
     
@@ -70,7 +78,7 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
       if (rawData.loopGain !== undefined) this.dspValues.loopGain = this._getDspValue('loopGain', rawData.loopGain);
       if (rawData.cutoffParam !== undefined) this.dspValues.lpfCutoff = rawData.cutoffParam; 
       if (rawData.resonanceParam !== undefined) this.dspValues.lpfQ = rawData.resonanceParam; 
-      if (rawData.bpfQParam !== undefined) this.dspValues.bpfQ = rawData.bpfQParam;       
+      // if (rawData.bpfQParam !== undefined) this.dspValues.bpfQ = rawData.bpfQParam; // bpfQ is no longer directly used for modal Qs
       if (rawData.bpfBankMixLevelParam !== undefined) this.dspValues.bpfBankMix = this._getDspValue('bpfBankMixLevelParam', rawData.bpfBankMixLevelParam);
       if (rawData.sawPulseMixParam !== undefined) this.dspValues.sawPulseMix = this._getDspValue('sawPulseMixParam', rawData.sawPulseMixParam);
       if (rawData.pulseWidthParam !== undefined) this.dspValues.pulseWidth = this._getDspValue('pulseWidthParam', rawData.pulseWidthParam);
@@ -102,9 +110,11 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
       if (rawValues.resonanceParam !== undefined && rawValues.resonanceParam !== this.dspValues.lpfQ) {
           recalcLpf = true;   
       }
-      if (rawValues.bpfQParam !== undefined && rawValues.bpfQParam !== this.dspValues.bpfQ) { // Compare with the stored 0-1 value
-          recalcBpfBank = true;    
-      }
+      // No longer recalculating BPF bank based on bpfQParam directly, modal Qs are fixed for now.
+      // If modal parameters become dynamic, this will need revisiting.
+      // if (rawValues.bpfQParam !== undefined && rawValues.bpfQParam !== this.dspValues.bpfQ) { 
+      //     recalcBpfBank = true;    
+      // }
       
       this._updateDspValuesFromRaw(rawValues);
 
@@ -112,14 +122,14 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
           this._initializeDelayLine(); 
       } else {
           if (recalcLpf) this._calculateLpfCoefficients();
-          if (recalcBpfBank) this._calculateBpfBankCoefficients(); 
+          // if (recalcBpfBank) this._calculateBpfBankCoefficients(); // Old BPF bank
       }
     }
   }
   
   _recalculateAllCoefficients() { 
       this._calculateLpfCoefficients();
-      this._calculateBpfBankCoefficients();
+      this._calculateModalBodyCoefficients(); // New method for modal body
   }
 
   _calculateLpfCoefficients() { 
@@ -146,41 +156,47 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
     this.lpf_a1 = a1_lpf_rbj / a0_lpf_coeff; this.lpf_a2 = a2_lpf_rbj / a0_lpf_coeff;
   }
 
-  _calculateBpfBankCoefficients() { 
+  _calculateModalBodyCoefficients() {
     const Fs = this.sampleRate;
-    let actualGlobalBQ = this._getDspValue('bpfQParam', this.dspValues.bpfQ);
-    // Workaround: Ensure Q is at least 0.707 to prevent division by zero or extreme attenuation if mapping fails
-    // The root cause is likely missing/incorrect paramMappings for bpfQParam from main.js
-    actualGlobalBQ = Math.max(0.707, actualGlobalBQ);
+    for (let i = 0; i < this.numBodyModes; i++) {
+        const F0   = this.bodyModeFreqs[i];
+        const Q    = this.bodyModeQs[i];
+        const Gain = this.bodyModeGains[i];
 
-    for (let i = 0; i < this.numBpfChannels; i++) {
-        const F0_bpf = this.violinOpenStringFreqs[i]; 
-        const Q_bpf = actualGlobalBQ; 
-        if (F0_bpf <=0 || F0_bpf >= Fs / 2) {
-            this.bp_b0[i] = 1; this.bp_b1[i] = 0; this.bp_b2[i] = 0; this.bp_a1[i] = 0; this.bp_a2[i] = 0;
+        if (F0 <= 0 || F0 >= Fs / 2 || Q <= 0) {
+            // Flat response (bypass) if parameters are invalid
+            this.bodyMode_b0[i] = 1; this.bodyMode_b1[i] = 0; this.bodyMode_b2[i] = 0;
+            this.bodyMode_a1[i] = 0; this.bodyMode_a2[i] = 0;
             continue;
         }
-        const omega_bpf = 2 * Math.PI * F0_bpf / Fs;
-        const s_bpf = Math.sin(omega_bpf);
-        const c_bpf = Math.cos(omega_bpf);
-        const alpha_bpf = s_bpf / (2 * Q_bpf);
-        const b0_coeff = Q_bpf * alpha_bpf; 
-        const b1_coeff = 0;
-        const b2_coeff = -(Q_bpf * alpha_bpf); 
-        const a0_coeff = 1 + alpha_bpf;
-        const a1_rbj = -2 * c_bpf;
-        const a2_rbj = 1 - alpha_bpf;
-        this.bp_b0[i] = b0_coeff / a0_coeff; this.bp_b1[i] = b1_coeff / a0_coeff; 
-        this.bp_b2[i] = b2_coeff / a0_coeff; this.bp_a1[i] = a1_rbj / a0_coeff;
-        this.bp_a2[i] = a2_rbj / a0_coeff;
+
+        const omega = 2 * Math.PI * F0 / Fs;
+        const s_omega = Math.sin(omega);
+        const c_omega = Math.cos(omega);
+        const alpha = s_omega / (2 * Q);
+
+        // Coefficients for a BPF with peak gain = 1 (0dB)
+        const b0_norm = alpha;
+        const b1_norm = 0;
+        const b2_norm = -alpha;
+        const a0_norm = 1 + alpha;
+        const a1_norm = -2 * c_omega;
+        const a2_norm = 1 - alpha;
+        
+        // Apply modal gain and normalize by a0_norm
+        this.bodyMode_b0[i] = (Gain * b0_norm) / a0_norm;
+        this.bodyMode_b1[i] = (Gain * b1_norm) / a0_norm; // still 0
+        this.bodyMode_b2[i] = (Gain * b2_norm) / a0_norm;
+        this.bodyMode_a1[i] = a1_norm / a0_norm;
+        this.bodyMode_a2[i] = a2_norm / a0_norm;
     }
   }
 
   _resetFilterStates() { 
     this.lpf_z1 = 0.0; this.lpf_z2 = 0.0;
-    for (let i = 0; i < this.numBpfChannels; i++) {
-        this.bp_z1_state[i] = 0.0; 
-        this.bp_z2_state[i] = 0.0;
+    for (let i = 0; i < this.numBodyModes; i++) {
+        this.bodyMode_z1_states[i] = 0.0; 
+        this.bodyMode_z2_states[i] = 0.0;
     }
   }
   _resetSawPhase() { this.sawPhase = 0.0; }
@@ -216,18 +232,16 @@ class ContinuousExcitationProcessor extends AudioWorkletProcessor {
       this.lpf_z1 = (this.lpf_b1 * x_n) - (this.lpf_a1 * y_n_lpf) + this.lpf_z2;
       this.lpf_z2 = (this.lpf_b2 * x_n) - (this.lpf_a2 * y_n_lpf);
       
-      let y_n_bpf_summed = 0.0;
-      for (let ch = 0; ch < this.numBpfChannels; ch++) {
-          const y_n_bpf_ch = this.bp_b0[ch] * x_n + this.bp_z1_state[ch];
-          this.bp_z1_state[ch] = (this.bp_b1[ch] * x_n) - (this.bp_a1[ch] * y_n_bpf_ch) + this.bp_z2_state[ch];
-          this.bp_z2_state[ch] = (this.bp_b2[ch] * x_n) - (this.bp_a2[ch] * y_n_bpf_ch);
-          y_n_bpf_summed += y_n_bpf_ch;
+      let y_n_body_modes_summed = 0.0;
+      for (let ch = 0; ch < this.numBodyModes; ch++) {
+          const y_n_mode_ch = this.bodyMode_b0[ch] * x_n + this.bodyMode_z1_states[ch];
+          this.bodyMode_z1_states[ch] = (this.bodyMode_b1[ch] * x_n) - (this.bodyMode_a1[ch] * y_n_mode_ch) + this.bodyMode_z2_states[ch];
+          this.bodyMode_z2_states[ch] = (this.bodyMode_b2[ch] * x_n) - (this.bodyMode_a2[ch] * y_n_mode_ch);
+          y_n_body_modes_summed += y_n_mode_ch;
       }
-      if (this.numBpfChannels > 0) { 
-          // y_n_bpf_summed /= this.numBpfChannels; // Temporarily removed for testing Q=0.707 silence
-      }
+      // Averaging is not typically done for modal synthesis outputs unless specifically desired for an effect.
 
-      const y_n_combined = (y_n_lpf * (1.0 - currentBpfBankMix)) + (y_n_bpf_summed * currentBpfBankMix);
+      const y_n_combined = (y_n_lpf * (1.0 - currentBpfBankMix)) + (y_n_body_modes_summed * currentBpfBankMix);
       
       outputChannel[i] = y_n_combined; 
       let feedbackSample = y_n_combined * currentLoopGain;
