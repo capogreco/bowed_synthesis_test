@@ -1,89 +1,114 @@
-# Bowed String Synthesis - Web Audio Experiment
+# Bowed String Synthesis - Advanced Web Audio Experiment
 
-This project is an experiment in creating a bowed string synthesizer using the Web Audio API, specifically `AudioContext` and `AudioWorkletProcessor`. We are incrementally building up a physical model to explore different synthesis techniques.
+This project is an experiment in creating a physically-inspired bowed string synthesizer using the Web Audio API, `AudioContext`, and `AudioWorkletProcessor`. It features a detailed modal synthesis engine, expressive performance controls, and an integrated FDN reverb.
 
-## Current Status (as of end of session 2024-05-04 - AudioParam Refactor)
-<!-- Please update date as needed -->
+## Current Status (May 2024)
 
-The synthesizer currently implements the following:
+The synthesizer now implements a comprehensive set of features for realistic and expressive bowed string performance:
 
-**Core Engine (`basic-processor.js` - an `AudioWorkletProcessor`):**
+**Core Synthesis Engine (`basic-processor.js` - an `AudioWorkletProcessor`):**
 
-1.  **Feedback Loop (Karplus-Strong Inspired):**
-    *   A delay line (`this.delayLine`) whose length is determined by a main "String Freq (Hz)" parameter.
-    *   A "Loop Gain" parameter controlling the overall feedback gain.
+1.  **Modal String Model:**
+    *   `NUM_STRING_MODES` (currently 32) biquad filter resonators simulating string modes.
+    *   Harmonic series with adjustable inharmonicity based on "String Material".
+    *   Frequency-dependent damping: Higher modes decay faster, also influenced by "String Damping" and "String Material".
+    *   Mode amplitudes decrease with mode number, scaled by "String Material" brightness.
+    *   Bow position (`bowPosition`) affects harmonic content by suppressing modes with nodes at the bowing point.
 
-2.  **Hybrid Excitation Source (mixed into the feedback loop when `isBowing` is true):**
-    *   **Sawtooth Wave:** Locked to the main string frequency.
-    *   **Pulse Wave:** Also locked to the main string frequency, with controllable "Pulse Width". The pulse wave is inverted before mixing.
-    *   **Noise:** White noise `(Math.random() * 2 - 1)`.
-    *   **Mixing Scheme for Excitation:**
-        1.  "Pulse/Saw Mix" (`sawPulseMixParam`): Blends the (inverted) pulse and saw waves (0=Pulse, 1=Saw).
-        2.  "Noise/Tone Mix" (`toneNoiseMixParam`): Blends the combined Pulse/Saw tone with noise (0=Noise, 1=Tone).
-        3.  "Excite Intensity" (`bowForce`): Scales this final mixed excitation signal before it's added into the feedback loop.
+2.  **Continuous Bow Excitation Model:**
+    *   Simulates bow-string interaction when "Start Bowing" is active.
+    *   **Excitation Source:** A mix of a harmonically-rich sawtooth-like wave and filtered noise.
+    *   **Physical Bow Parameters:**
+        *   `bowForce`: Simulates bow pressure, affecting brightness and scratchiness.
+        *   `bowPosition`: Simulates bowing point (sul ponticello to sul tasto), affecting timbre.
+        *   `bowSpeed`: Simulates bow speed, affecting harmonic content and smoothness.
+    *   **Dynamic Interaction:** These parameters interact to create a wide range of timbres, from soft and warm to aggressive and scratchy.
+    *   Smooth attack/release envelope on bow start/stop.
 
-3.  **Filtering Stage (within the feedback loop):**
-    *   **Main Low-Pass Filter (LPF):**
-        *   A biquad resonant LPF.
-        *   "LPF Cutoff" (`cutoffParam`): UI slider (0-1) maps logarithmically to frequency.
-        *   "LPF Reso" (`resonanceParam`): UI slider (0-1) maps via a power curve (cubed) to Q (actual Q max ~2.5).
-    *   **Modal Body Resonator (3 modes):**
-        *   Three biquad Band-Pass Filters operating in parallel, simulating prominent body modes.
-        *   Default Mode Parameters (Base Frequencies before UI control, Q, Gain):
-            *   Mode 1: Base C#4 (~277 Hz), Base Q=10, Relative Gain=0.8
-            *   Mode 2: Base A#4 (~466 Hz), Base Q=15, Relative Gain=1.0
-            *   Mode 3: Base C#5 (~554 Hz), Base Q=12, Relative Gain=0.9
-        *   UI Controls for Modal Body:
-            *   **Mode 1/2/3 Freq Select:** Three dropdown menus, each allowing selection of the center frequency for one mode from a 12-note (1-octave) 12-TET range. The ranges are centered around the base frequencies listed above.
-            *   **Body Mode Q:** A slider that globally scales the Q values of all three modes (0.25x to 4.0x of their base Qs).
-        *   Relative gains for each mode are currently fixed.
-        *   Coefficient Type: BPFs are designed for a peak gain of 1 (0dB) at their center frequency, then scaled by the mode's specific "Relative Gain". Q controls bandwidth.
-        *   Summing & Mixing: Outputs of the three modal BPFs are summed (not averaged). This sum is then mixed with the LPF output via the "Body Reso Mix" UI slider (`bpfBankMixLevelParam` 0-1).
-    *   The combined LPF + Modal Body signal is then processed by `loopGain` and has excitation added.
+3.  **String Material Simulation:**
+    *   Dropdown for "String Material": Steel, Gut, Nylon, Wound.
+    *   Affects inharmonicity, damping characteristics, and overall brightness/harmonic content of the string modes.
 
-4.  **Parameter Management via `AudioParam`:**
-    *   Most UI-controlled synthesis parameters (e.g., LPF settings, modal body Q/frequencies, mix levels, excitation parameters) are now managed using `AudioParam`s defined in `basic-processor.js`.
-    *   `main.js` updates these `AudioParam`s directly, primarily using `linearRampToValueAtTime()` for sliders to ensure smooth transitions and reduce audible glitches. Modal frequency dropdowns use `setValueAtTime()`.
-    *   The main string `frequency` (affecting delay line length) and bowing state are still handled via `messagePort` due to the structural changes they incur.
-    *   `basic-processor.js` reads the `AudioParam` values in its `process()` method, caches them, and recalculates filter coefficients when they change.
+4.  **Master Low-Pass Filter (LPF):**
+    *   A biquad resonant LPF shapes the overall tone.
+    *   Controlled by a single "Brightness" slider.
+    *   Internally, "Brightness" maps to LPF cutoff frequency.
+    *   LPF Q is fixed at a musically useful value.
+    *   Dynamically modulated by `bowForce` and `bowSpeed` for realistic tonal changes.
+
+5.  **Modal Body Resonator:**
+    *   Simulates the instrument body using 5 parallel biquad Band-Pass Filters.
+    *   **"Body Type" Presets:** Violin, Viola, Cello, Guitar, None. Each preset loads distinct resonant frequencies, Q values, and gains for the 5 body modes.
+    *   **"Body Resonance" Slider:** Controls the mix level of the body resonator signal with the direct string sound.
+
+6.  **Expressivity Engine (Mutually Exclusive Modes):**
+    *   Selected via a 4-way radio button: None, Vibrato, Trill, Tremolo.
+    *   **Vibrato:**
+        *   `vibratoRate`: Speed of vibrato (Hz).
+        *   `vibratoDepth`: Intensity of vibrato.
+        *   Modulates both pitch (±6%) and amplitude (±20%) with a fixed realistic blend.
+    *   **Trill:**
+        *   `trillInterval`: Interval above the base note (Minor 2nd to Octave).
+        *   `trillSpeed`: Speed of alternation (Hz).
+        *   `trillArticulation`: Duty cycle of the trill notes (staccato to legato).
+        *   Simulates hammer-on/lift-off effects with amplitude and brightness changes.
+        *   Gradual speed ramp-up/down when starting/stopping.
+    *   **Tremolo:**
+        *   `tremoloSpeed`: Speed of bow strokes (Hz).
+        *   `tremoloDepth`: Intensity of the tremolo effect.
+        *   `tremoloArticulation`: Duty cycle of strokes (staccato to legato).
+        *   Models bow speed changes within each stroke (slows at turnarounds).
+        *   Adds scratchiness and brightness variations at bow direction changes.
+        *   Simulates increased bow pressure.
+
+7.  **Master Output Stage:**
+    *   "Master Volume" slider controlling overall output level (0x to 10x gain).
+    *   Soft clipping (`tanh`) to prevent harsh digital distortion at high levels.
+
+**Integrated FDN Reverb (`reverb-processor.js` - an `AudioWorkletProcessor`):**
+
+1.  **12-Delay Line Feedback Delay Network (FDN):**
+    *   Prime number based delay lengths for smooth diffusion.
+    *   12x12 Hadamard-inspired orthogonal mixing matrix.
+2.  **Input Diffusion:**
+    *   4 cascaded allpass filters to smear transients.
+3.  **Modulation:**
+    *   LFO per delay line for subtle pitch variation, reducing metallic ringing.
+4.  **Early Reflections Network:**
+    *   10 discrete taps simulating early room reflections.
+5.  **Per-Delay Damping:**
+    *   Simple low-pass filters in each feedback loop.
+6.  **DC Blocking:**
+    *   High-pass filters at input and within feedback loops to prevent DC buildup.
+7.  **Simplified UI Controls:**
+    *   **"Space" Preset Selector:** Dry Studio, Chamber, Concert Hall, Cathedral, Custom.
+    *   **"Mix" Slider:** Dry/Wet balance.
+    *   **"Size" Slider:** Overall perceived room size (intelligently maps to `roomSize` and `earlyLevel`).
+    *   **"Decay" Slider:** Reverb tail length (capped at 0.90 for stability).
+    *   Advanced parameters (actual `roomSize`, `decay`, `damping`, `preDelay`, `diffusion`, `modulation`, `earlyLevel`) are set by presets or indirectly by simplified sliders, but are also present as hidden inputs for future "advanced" UI.
 
 **User Interface (`index.html` & `main.js`):**
 
-*   Sliders and dropdowns for key synthesis parameters with real-time numeric value display. Slider-based changes are now significantly smoother due to `AudioParam` ramping.
-    *   Modal body frequencies are controlled by three independent dropdown selectors.
-    *   A "Body Mode Q" slider globally scales the Q of the modal body resonators.
+*   Clean, grouped layout with sliders and dropdowns for all key synthesis and reverb parameters.
+*   Real-time numeric value display for sliders.
+*   Expression mode selection via radio buttons.
 *   "Start Audio" / "Suspend Audio" button.
-*   "Start Bowing" / "Stop Bowing" button.
+*   "Start Bowing" / "Stop Bowing" button, which also visually changes state.
+*   All parameters are managed via `AudioParam`s for smooth, sample-accurate changes.
 
 **Development Server (`serve.ts`):**
 *   A Deno script to serve the `app` directory.
-*   Tasks defined in `deno.json` (`deno task start`, `deno task dev`).
+*   Tasks defined in `deno.json`.
 
 **Project Structure:**
-*   Snapshots of previous working iterations are stored in the `experiments/` directory.
-*   Version controlled with Git, pushed to GitHub.
+*   Snapshots of previous iterations are stored in the `experiments/` directory.
+*   Documentation on reverb and synthesis techniques in the `docs/` directory.
 
-## Known Issues / Quirks:
+## Known Issues / Future Considerations:
 
-*   **Parameter Change Glitches:** Audible glitches when changing parameters have been significantly reduced for sliders by migrating to `AudioParam`s with `linearRampToValueAtTime()`.
-    *   Changes to modal frequencies via dropdowns (using `setValueAtTime()`) are still abrupt but generally acceptable for discrete note changes.
-    *   The main string "Frequency" slider still causes an abrupt sound change and re-initialization, as it's not yet an `AudioParam` (due to delay line resizing requirements). True per-sample coefficient smoothing within the processor could further refine this for all parameters.
-*   **Modal Gains Fixed:** The relative gains for each of the three body modes are currently hardcoded in `basic-processor.js`.
-*   Interactions between `loopGain` and the modal body resonator (especially with its current gains and Q range) can still lead to strong resonances, requiring careful adjustment of the "Body Reso Mix" and `loopGain`.
+*   **Main String Frequency Portamento:** The main string "Pitch (Hz)" slider still causes an abrupt sound change as it's not yet a smoothly ramped `AudioParam` (due to the complexity of dynamically resizing/interpolating the core modal resonators in real-time).
+*   **Advanced Reverb Controls:** Currently, only simplified reverb controls are visible. An "Advanced" panel could expose all underlying FDN parameters.
+*   **Visualization:** No real-time audio visualization yet (waveform, spectrum).
+*   **Asymmetric Vibrato:** Flagged as a TODO for more nuanced vibrato waveshaping.
 
-## Potential Next Steps for Tomorrow/Future:
-
-1.  **Main String Frequency Portamento:** Re-architect the delay line in `basic-processor.js` (e.g., using fractional delays) to allow the main string `frequency` to be controlled smoothly by an `AudioParam`, enabling portamento. This would address the remaining major source of abrupt sound change on parameter update.
-2.  **Enhance Modal Body Resonator:**
-    *   Consider UI controls for individual mode gains.
-    *   Investigate adding more modes to the body resonator.
-    *   Explore dynamic modulation of modal parameters based on performance gestures.
-3.  **Dynamic \"Gestural\" Control:**
-    *   Link "Excite Intensity" (`dspValues.exciteIntensity`) to modulate "LPF Cutoff" (`dspValues.lpfCutoff`) slightly (brighter with more intensity).
-    *   Explore other simple parameter intermodulations.
-4.  **Refine Excitation:**
-    *   Consider if the current 2-stage mixing for Saw/Pulse then with Noise is optimal, or if a 3-way direct mix (or other scheme) would be more intuitive or sonically versatile.
-5.  **Dynamics (Attack/Release):** Implement simple envelopes for the "bowing" action.
-6.  **Stability/Gain Staging Review:** As complexity grows, ensure the signal path is well-behaved. Consider if a master volume control directly in the AudioWorklet is needed.
-
-Looking forward to continuing!
+This project showcases a powerful and expressive bowed string synthesizer built entirely within the Web Audio API, demonstrating the capabilities of `AudioWorklet` for complex DSP.
